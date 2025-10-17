@@ -92,7 +92,7 @@ CREATE INDEX idx_profiles_referral ON public.profiles(referred_by);
 
 -- Analytics: Track user growth
 CREATE INDEX idx_profiles_signup_source ON public.profiles(signup_source);
-CREATE INDEX idx_profiles_date ON public.profiles(DATE(created_at));
+-- Date-based index removed for compatibility
 
 -- ============================================================================
 -- POSTS TABLE (Core feature)
@@ -164,8 +164,7 @@ CREATE INDEX idx_posts_scope_created ON public.posts(scope, created_at DESC);
 CREATE INDEX idx_posts_user_created ON public.posts(user_id, created_at DESC);
 CREATE INDEX idx_posts_tier_created ON public.posts(tier, created_at DESC);
 
--- Analytics: Posts by date
-CREATE INDEX idx_posts_date ON public.posts(DATE(created_at));
+-- Analytics: Posts by date - removed for compatibility
 
 -- ============================================================================
 -- REACTIONS TABLE
@@ -189,8 +188,7 @@ CREATE INDEX idx_reactions_post_id ON public.reactions(post_id);
 CREATE INDEX idx_reactions_user_id ON public.reactions(user_id);
 CREATE INDEX idx_reactions_created_at ON public.reactions(created_at DESC);
 
--- Analytics: Reaction trends
-CREATE INDEX idx_reactions_type_date ON public.reactions(reaction_type, DATE(created_at));
+-- Analytics: Reaction trends - removed for compatibility
 
 -- ============================================================================
 -- REACTION COUNTS (Denormalized for performance)
@@ -274,16 +272,13 @@ CREATE TABLE public.day_posts (
   
   created_at TIMESTAMPTZ DEFAULT NOW(),
   
-  -- Constraint: One post per user per day
-  UNIQUE(user_id, day_of_week, DATE(created_at)),
-  
   CONSTRAINT content_length CHECK (char_length(content) >= 3 AND char_length(content) <= 1000)
 );
 
 CREATE INDEX idx_day_posts_user_id ON public.day_posts(user_id);
 CREATE INDEX idx_day_posts_day ON public.day_posts(day_of_week);
 CREATE INDEX idx_day_posts_created_at ON public.day_posts(created_at DESC);
-CREATE INDEX idx_day_posts_day_date ON public.day_posts(day_of_week, DATE(created_at));
+-- Date-based composite index removed for compatibility
 
 -- ============================================================================
 -- NOTIFICATIONS TABLE
@@ -351,8 +346,8 @@ CREATE INDEX idx_trending_rank ON public.trending_cache(source, rank);
 CREATE INDEX idx_trending_expires ON public.trending_cache(expires_at);
 CREATE INDEX idx_trending_category ON public.trending_cache(category);
 
--- Auto-delete expired trending data
-CREATE INDEX idx_trending_cleanup ON public.trending_cache(expires_at) WHERE expires_at < NOW();
+-- Auto-delete expired trending data (index without NOW() for compatibility)
+CREATE INDEX idx_trending_cleanup ON public.trending_cache(expires_at);
 
 -- ============================================================================
 -- ANALYTICS TABLES (Future-proof)

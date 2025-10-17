@@ -1,22 +1,13 @@
-# Supabase Configuration
-# https://supabase.com/docs/guides/cli/config
-
-[project]
-id = "onlyone-today"
-name = "OnlyOne.Today"
+# Supabase Local Development Configuration
 
 [api]
 enabled = true
 port = 54321
 max_rows = 1000
-# Enable detailed query logging for analytics
-extra_search_path = ["public", "extensions"]
 
 [db]
 port = 54322
 major_version = 15
-# Enable extensions needed for our features
-extensions = ["uuid-ossp", "pg_trgm", "vector", "pg_cron"]
 
 [db.pooler]
 enabled = true
@@ -27,56 +18,29 @@ max_client_conn = 100
 
 [realtime]
 enabled = true
-ip_version = "ipv4"
-# Increase limits for leaderboards and live features
-max_concurrent_users = 200
-max_channels_per_client = 100
-max_events_per_second = 100
+ip_version = "IPv4"
 
 [studio]
 enabled = true
 port = 54323
 api_url = "http://localhost"
 
-# Auth configuration
 [auth]
 enabled = true
-site_url = "http://localhost:8081" # Mobile app deep link
-# OTP configuration
-[auth.sms]
-autoconfirm = false
-max_frequency = 60 # 1 OTP per minute per number
+site_url = "http://localhost:8081"
+
 [auth.email]
 enable_signup = true
 double_confirm_changes = true
-enable_confirmations = false # Email confirmation optional for faster onboarding
-max_frequency = 60
+enable_confirmations = false
 
-# Rate limiting (prevent abuse)
-[auth.rate_limit]
-email_sent = 10 # 10 emails per hour
-sms_sent = 10 # 10 SMS per hour
-
-# Storage configuration
 [storage]
 enabled = true
 file_size_limit = "50MiB"
-# Allowed file types for profile pics and future photos
-[storage.buckets.avatars]
-public = true
-file_size_limit = "5MiB"
-allowed_mime_types = ["image/jpeg", "image/png", "image/webp"]
 
-[storage.buckets.posts]
-public = true
-file_size_limit = "10MiB"
-allowed_mime_types = ["image/jpeg", "image/png", "image/webp"]
-
-# Edge Functions
 [functions]
-enabled = true
+[functions.create-post]
+verify_jwt = false
 
-# Analytics (for future)
 [analytics]
-enabled = true
-
+enabled = false
