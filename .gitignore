@@ -1,0 +1,12 @@
+# Supabase
+.branches
+.temp
+.env
+.env.local
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+
