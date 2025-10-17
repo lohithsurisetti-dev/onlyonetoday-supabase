@@ -1,0 +1,15 @@
+{
+  "deno.enable": true,
+  "deno.lint": true,
+  "deno.unstable": false,
+  "deno.path": "supabase",
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.validate.enable": false,
+  "[typescript]": {
+    "editor.defaultFormatter": "denoland.vscode-deno"
+  },
+  "files.associations": {
+    "*.ts": "typescript"
+  }
+}
+
