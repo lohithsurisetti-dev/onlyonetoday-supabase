@@ -73,14 +73,7 @@ serve(
         error: authError,
       } = await supabaseClient.auth.getUser();
 
-      // Temporary bypass for testing - create a mock user if auth fails
-      const mockUser = user || {
-        id: 'test-user-id',
-        email: 'lohithsurisetty@gmail.com',
-        created_at: new Date().toISOString()
-      };
-
-      if (authError && !mockUser) {
+      if (authError || !user) {
         Logger.warn('Unauthorized request', { authError });
         return new Response(
           JSON.stringify({ error: 'Unauthorized' }),
@@ -91,7 +84,7 @@ serve(
         );
       }
 
-      Logger.request('POST', '/create-post', { userId: mockUser.id });
+      Logger.request('POST', '/create-post', { userId: user.id });
 
       // 3. Parse and validate request body
       const body = await req.json();
@@ -100,7 +93,7 @@ serve(
       // 4. Rate limiting (max 10 posts per hour)
       await Validator.checkRateLimit(
         supabaseClient,
-        mockUser.id,
+        user.id,
         'post_created',
         10,
         60
@@ -125,14 +118,14 @@ serve(
       const postService = new PostService(supabaseClient);
       const result = await postService.create(
         { ...validatedRequest, content: sanitizedContent },
-        mockUser.id
+        user.id
       );
 
       // 7. Send achievement notification if elite
       if (result.post.tier === 'elite') {
         const notificationService = new NotificationService(supabaseClient);
         await notificationService.sendAchievementNotification(
-          mockUser.id,
+          user.id,
           result.post.tier,
           result.post.content
         );
