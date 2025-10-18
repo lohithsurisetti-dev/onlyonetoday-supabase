@@ -8,8 +8,8 @@
  * Speed: 50-100ms
  */
 
-import { Logger } from '../utils/logger.ts';
-import { PerformanceTracker } from '../utils/performance.ts';
+import { Logger } from '../utils/logger';
+import { PerformanceTracker } from '../utils/performance';
 
 export class OpenAIEmbeddingService {
   private static apiKey: string | undefined;

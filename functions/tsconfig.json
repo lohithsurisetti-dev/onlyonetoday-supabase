@@ -1,9 +1,9 @@
 {
   "compilerOptions": {
     "target": "esnext",
-    "lib": ["esnext", "dom", "deno.ns"],
+    "lib": ["esnext", "dom"],
     "module": "esnext",
-    "moduleResolution": "bundler",
+    "moduleResolution": "node",
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
     "strict": false,
@@ -12,11 +12,13 @@
     "noUnusedParameters": false,
     "noImplicitAny": false,
     "allowJs": true,
-    "checkJs": false
+    "checkJs": false,
+    "types": []
   },
   "include": [
     "**/*.ts",
-    "deno.d.ts"
+    "deno.d.ts",
+    "shared/types/esm.d.ts"
   ]
 }
 

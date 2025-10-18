@@ -4,7 +4,7 @@
  */
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { Logger } from '../utils/logger.ts';
+import { Logger } from '../utils/logger';
 
 export interface TemporalData {
   week: {
@@ -228,4 +228,4 @@ export class TemporalAnalyticsService {
 }
 
 // Import PerformanceTracker
-import { PerformanceTracker } from '../utils/performance.ts';
+import { PerformanceTracker } from '../utils/performance';

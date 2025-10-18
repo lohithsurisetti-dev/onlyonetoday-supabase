@@ -3,9 +3,9 @@
  * Standardized error responses and handling
  */
 
-import { Logger } from './logger.ts';
-import { ValidationError } from './validation.ts';
-import type { ApiError } from '../types/api.types.ts';
+import { Logger } from './logger';
+import { ValidationError } from './validation';
+import type { ApiError } from '../types/api.types';
 
 export class AppError extends Error {
   constructor(

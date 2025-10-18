@@ -7,9 +7,10 @@
  * Accuracy: 95%+ for duplicate detection
  */
 
+// @ts-ignore - Transformers.js ESM import works at runtime
 import { pipeline } from 'https://esm.sh/@xenova/transformers@2.17.1';
-import { Logger } from '../utils/logger.ts';
-import { PerformanceTracker } from '../utils/performance.ts';
+import { Logger } from '../utils/logger';
+import { PerformanceTracker } from '../utils/performance';
 
 export class EmbeddingService {
   private static embedder: any = null;

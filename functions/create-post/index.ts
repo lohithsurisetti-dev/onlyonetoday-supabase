@@ -12,15 +12,16 @@
  * Auth: Required
  */
 
+// @ts-ignore - Deno std imports work at runtime
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import type { CreatePostRequest, CreatePostResponse } from '../shared/types/api.types.ts';
-import { PostService } from '../shared/services/PostService.ts';
-import { NotificationService } from '../shared/services/NotificationService.ts';
-import { Validator } from '../shared/utils/validation.ts';
-import { ErrorHandler } from '../shared/utils/errors.ts';
-import { Logger } from '../shared/utils/logger.ts';
-import { withPerformanceTracking } from '../shared/utils/performance.ts';
+import type { CreatePostRequest, CreatePostResponse } from '../shared/types/api.types';
+import { PostService } from '../shared/services/PostService';
+import { NotificationService } from '../shared/services/NotificationService';
+import { Validator } from '../shared/utils/validation';
+import { ErrorHandler } from '../shared/utils/errors';
+import { Logger } from '../shared/utils/logger';
+import { withPerformanceTracking } from '../shared/utils/performance';
 
 // ============================================================================
 // CORS Headers
@@ -133,7 +134,7 @@ serve(
 
       // 8. Return success response
       Logger.response(200, result.analytics.processingTime, {
-        userId: mockUser.id,
+        userId: user.id,
         postId: result.post.id,
         tier: result.post.tier,
       });

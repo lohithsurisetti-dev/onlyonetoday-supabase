@@ -3,8 +3,8 @@
  * Ensure data integrity and security
  */
 
-import type { CreatePostRequest, CreateDayPostRequest } from '../types/api.types.ts';
-import type { PostType, ScopeType, DayOfWeek } from '../types/database.types.ts';
+import type { CreatePostRequest, CreateDayPostRequest } from '../types/api.types';
+import type { PostType, ScopeType, DayOfWeek } from '../types/database.types';
 
 export class ValidationError extends Error {
   constructor(

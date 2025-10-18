@@ -10,9 +10,9 @@
  */
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import type { SendNotificationRequest, SendPushNotificationRequest } from '../types/api.types.ts';
-import { Logger } from '../utils/logger.ts';
-import { PerformanceTracker } from '../utils/performance.ts';
+import type { SendNotificationRequest, SendPushNotificationRequest } from '../types/api.types';
+import { Logger } from '../utils/logger';
+import { PerformanceTracker } from '../utils/performance';
 
 // Expo Push SDK
 interface ExpoPushMessage {

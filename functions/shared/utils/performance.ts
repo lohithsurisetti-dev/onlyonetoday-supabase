@@ -3,7 +3,7 @@
  * Track operation durations for analytics and optimization
  */
 
-import { Logger } from './logger.ts';
+import { Logger } from './logger';
 
 export class PerformanceTracker {
   private startTime: number;

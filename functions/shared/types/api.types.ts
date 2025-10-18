@@ -3,7 +3,7 @@
  * Used by Edge Functions and Mobile App
  */
 
-import type { PostType, ScopeType, TierType, ReactionType, DayOfWeek } from './database.types.ts';
+import type { PostType, ScopeType, TierType, ReactionType, DayOfWeek } from './database.types';
 
 // ============================================================================
 // POST APIs
