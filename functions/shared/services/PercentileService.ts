@@ -8,7 +8,7 @@
 
 export interface PercentileResult {
   percentile: number; // e.g., 0.5 for "Top 0.5%"
-  tier: 'elite' | 'rare' | 'unique' | 'notable' | 'common' | 'popular';
+  tier: 'elite' | 'rare' | 'unique' | 'notable' | 'beloved' | 'popular';
   displayText: string; // e.g., "Top 0.5%"
   badge: string; // e.g., "🏆"
   message: string; // e.g., "You're rarer than 99.5% of people!"
@@ -38,7 +38,7 @@ export class PercentileService {
         tier: 'elite',
         displayText: 'Only you!',
         badge: '🏆',
-        message: "You're a unicorn! Only you did this! 🦄",
+        message: "You're the first to share this! 🌟",
         comparison: `Only you out of ${totalPostsInScope.toLocaleString()} people`
       };
     }
@@ -53,7 +53,7 @@ export class PercentileService {
         tier: 'elite',
         displayText: `Top ${formattedPercentile}%`,
         badge: '🏆',
-        message: `You're in the elite ${formattedPercentile}%! Rarer than ${(100 - percentile).toFixed(1)}% of people!`,
+        message: `You're in the top ${formattedPercentile}%! Amazing choice!`,
         comparison: `${peopleWhoDidThis} of ${totalPostsInScope.toLocaleString()} people`
       };
     } else if (percentile < 2) {
@@ -64,7 +64,7 @@ export class PercentileService {
         tier: 'elite',
         displayText: `Top ${formattedPercentile}%`,
         badge: '🏆',
-        message: `You're in the elite ${formattedPercentile}%! Rarer than ${(100 - percentile).toFixed(1)}% of people!`,
+        message: `You're in the top ${formattedPercentile}%! Amazing choice!`,
         comparison: `${peopleWhoDidThis} of ${totalPostsInScope.toLocaleString()} people`
       };
     } else if (percentile < 8) {
@@ -75,7 +75,7 @@ export class PercentileService {
         tier: 'rare',
         displayText: `Top ${formattedPercentile}%`,
         badge: '🌟',
-        message: `Highly exclusive! You're in the top ${formattedPercentile}%!`,
+        message: `Great choice! You're in the top ${formattedPercentile}%!`,
         comparison: `${peopleWhoDidThis} of ${totalPostsInScope.toLocaleString()} people`
       };
     } else if (percentile < 20) {
@@ -86,7 +86,7 @@ export class PercentileService {
         tier: 'unique',
         displayText: `Top ${formattedPercentile}%`,
         badge: '⭐',
-        message: `Nice! You're in the top ${formattedPercentile}%!`,
+        message: `Nice choice! You're in the top ${formattedPercentile}%!`,
         comparison: `${peopleWhoDidThis} of ${totalPostsInScope.toLocaleString()} people`
       };
     } else if (percentile < 40) {
@@ -97,18 +97,18 @@ export class PercentileService {
         tier: 'notable',
         displayText: `Top ${formattedPercentile}%`,
         badge: '✨',
-        message: `You're in the top ${formattedPercentile}%!`,
+        message: `Good choice! You're in the top ${formattedPercentile}%!`,
         comparison: `${peopleWhoDidThis} of ${totalPostsInScope.toLocaleString()} people`
       };
     } else if (percentile < 70) {
-      // COMMON: Top 70% (40% - 70%) - Realistic for common activities
+      // BELOVED: Top 70% (40% - 70%) - Popular activities cherished by many
       const formattedPercentile = Math.round(percentile);
       return {
         percentile,
-        tier: 'common',
+        tier: 'beloved',
         displayText: `Top ${formattedPercentile}%`,
-        badge: '✅',
-        message: `Popular choice! Join ${peopleWhoDidThis} others!`,
+        badge: '💖',
+        message: `Beloved choice! You're connected to ${peopleWhoDidThis - 1} others!`,
         comparison: `${peopleWhoDidThis} of ${totalPostsInScope.toLocaleString()} people`
       };
     } else {
@@ -119,7 +119,7 @@ export class PercentileService {
         tier: 'popular',
         displayText: `Join ${peopleWhoDidThis} others`,
         badge: '👥',
-        message: `You're not alone! ${peopleWhoDidThis} people did this too!`,
+        message: `You're part of a community! ${peopleWhoDidThis - 1} others did this too!`,
         comparison: `${peopleWhoDidThis} of ${totalPostsInScope.toLocaleString()} people`
       };
     }
@@ -163,12 +163,12 @@ export class PercentileService {
           text: 'text-pink-300',
           glow: 'shadow-pink-400/50'
         };
-      case 'common':
+      case 'beloved':
         return {
-          bg: 'from-green-400/20 to-emerald-500/20',
-          border: 'border-green-400/40',
-          text: 'text-green-300',
-          glow: 'shadow-green-400/50'
+          bg: 'from-pink-400/20 to-rose-500/20',
+          border: 'border-pink-400/40',
+          text: 'text-pink-300',
+          glow: 'shadow-pink-400/50'
         };
       case 'popular':
         return {
@@ -244,15 +244,15 @@ export class PercentileService {
   getMotivationalMessage(tier: PercentileResult['tier']): string {
     switch (tier) {
       case 'elite':
-        return "You're absolutely legendary! 🏆";
+        return "You're amazing! 🏆";
       case 'rare':
-        return "You're incredibly special! 🌟";
+        return "You're special! 🌟";
       case 'unique':
-        return "You're wonderfully unique! ⭐";
+        return "You're wonderful! ⭐";
       case 'notable':
-        return "You're definitely notable! ✨";
-      case 'common':
-        return "You're part of the community! ✅";
+        return "You're great! ✨";
+      case 'beloved':
+        return "You're cherished! 💖";
       case 'popular':
         return "You're in good company! 👥";
       default:

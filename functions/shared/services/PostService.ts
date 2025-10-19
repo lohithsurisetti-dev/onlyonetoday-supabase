@@ -15,6 +15,7 @@ import { EmbeddingService } from './EmbeddingService.ts';
 import { PercentileService, PercentileResult } from './PercentileService.ts';
 import { DaySummaryService, DaySummaryResult } from './DaySummaryService.ts';
 import { ModerationPipeline } from './ModerationPipeline.ts';
+import { cacheGet, cacheSet, cacheDel, CacheKeys, CacheTTL, hashContent } from '../utils/redis.ts';
 
 export interface CreatePostRequest {
   content: string;
@@ -95,6 +96,8 @@ export class PostService {
    * Create a new post with all advanced features
    */
   async createPost(request: CreatePostRequest): Promise<CreatePostResponse> {
+    const cpuStart = Date.now();
+    
     try {
       console.log(`🚀 Creating ${request.inputType} post: "${request.content.substring(0, 50)}..."`);
 
@@ -130,7 +133,7 @@ export class PostService {
         console.log('❌ Content rejected by moderation:', moderationResult.reason);
         return {
           success: false,
-          error: `Content rejected: ${moderationResult.flags.join(', ')}`
+          error: moderationResult.userMessage || `Content rejected: ${moderationResult.flags.join(', ')}`
         };
       }
 
@@ -200,21 +203,24 @@ export class PostService {
         request.locationCountry
       );
 
+      // Add 1 to total count to account for the current post being created
+      const adjustedTotalPostsInScope = totalPostsInScope + 1;
+
       // Safety check for percentile calculation
-      if (totalPostsInScope === 0) {
+      if (adjustedTotalPostsInScope === 0) {
         console.log('⚠️ No posts in scope, using default values');
-        totalPostsInScope = 1; // Avoid division by zero
+        adjustedTotalPostsInScope = 1; // Avoid division by zero
       }
 
       console.log('📊 Percentile calculation inputs:', {
         matchCount,
-        totalPostsInScope,
-        calculatedPercentile: (matchCount / totalPostsInScope) * 100
+        totalPostsInScope: adjustedTotalPostsInScope,
+        calculatedPercentile: (matchCount / adjustedTotalPostsInScope) * 100
       });
 
       const percentileResult = this.percentileService.calculatePercentile(
         matchCount,
-        totalPostsInScope
+        adjustedTotalPostsInScope
       );
 
       console.log('📊 Percentile result:', percentileResult);
@@ -226,17 +232,30 @@ export class PostService {
         console.log('🔧 Corrected percentile to:', percentileResult.percentile);
       }
 
-      // 8. Calculate temporal analytics
-      console.log('⏰ Calculating temporal analytics...');
-      const temporalAnalytics = await this.calculateTemporalAnalytics(
-        contentHash,
-        request.scope,
-        request.locationCity,
-        request.locationState,
-        request.locationCountry,
-        embeddingResult.embedding,
-        hasNegation
-      );
+      // 8. Calculate temporal analytics (smart optimization)
+      let temporalAnalytics = null;
+      if (percentileResult.tier === 'elite' && matchCount === 1) {
+        // Skip expensive temporal calculations for truly unique posts
+        console.log('⏰ Skipping temporal analytics for elite unique post (performance optimization)');
+        temporalAnalytics = {
+          today: { total: 1, matching: 1, percentile: 0, tier: 'elite', comparison: 'Only you!' },
+          week: { total: 1, matching: 1, percentile: 0, tier: 'elite', comparison: 'Only you!' },
+          month: { total: 1, matching: 1, percentile: 0, tier: 'elite', comparison: 'Only you!' },
+          year: { total: 1, matching: 1, percentile: 0, tier: 'elite', comparison: 'Only you!' },
+          allTime: { total: 1, matching: 1, percentile: 0, tier: 'elite', comparison: 'Only you!' }
+        };
+      } else {
+        console.log('⏰ Calculating temporal analytics...');
+        temporalAnalytics = await this.calculateTemporalAnalytics(
+          contentHash,
+          request.scope,
+          request.locationCity,
+          request.locationState,
+          request.locationCountry,
+          embeddingResult.embedding,
+          hasNegation
+        );
+      }
 
       // 9. Insert post into database
       console.log('💾 Inserting post into database...');
@@ -286,9 +305,17 @@ export class PostService {
       }
 
       // 10. Update temporal uniqueness table
+      console.log('⏰ Updating temporal uniqueness table...');
       await this.updateTemporalUniqueness(post.id, contentHash, temporalAnalytics);
 
       console.log('✅ Post created successfully!');
+      
+      const cpuTime = Date.now() - cpuStart;
+      console.log(`⏱️ Total CPU time: ${cpuTime}ms`);
+      
+      if (cpuTime > 25000) {
+        console.warn('⚠️ High CPU usage detected - consider optimization');
+      }
 
       return {
         success: true,
@@ -334,6 +361,16 @@ export class PostService {
     contentHash?: string
   ): Promise<any[]> {
     try {
+      // Check cache first if we have a content hash
+      if (contentHash) {
+        const cacheKey = CacheKeys.similarPosts(contentHash);
+        const cached = await cacheGet<any[]>(cacheKey);
+        if (cached) {
+          console.log('✅ Using cached similar posts');
+          return cached;
+        }
+      }
+      
       // Use semantic similarity with configurable threshold
       console.log('🔍 Calling match_posts_by_embedding with params:', {
         embedding_length: embedding.length,
@@ -361,7 +398,16 @@ export class PostService {
 
       console.log(`🔍 Found ${data?.length || 0} semantic matches with threshold 0.50`);
       console.log('🔍 Vector search results:', data);
-      return data || [];
+      
+      const results = data || [];
+      
+      // Cache the results if we have a content hash
+      if (contentHash && results.length > 0) {
+        const cacheKey = CacheKeys.similarPosts(contentHash);
+        await cacheSet(cacheKey, results, CacheTTL.SIMILAR_POSTS);
+      }
+      
+      return results;
     } catch (error) {
       console.error('❌ Content search error:', error);
       return [];
@@ -378,32 +424,44 @@ export class PostService {
     locationCountry?: string
   ): Promise<number> {
     try {
+      // Check cache first for total posts count
+      const countCacheKey = CacheKeys.totalPostsCount(scope, locationCity, locationState, locationCountry);
+      const cachedCount = await cacheGet<number>(countCacheKey);
+      if (cachedCount !== null) {
+        console.log('✅ Using cached total posts count');
+        return cachedCount;
+      }
+
       let query = this.supabase
         .from('posts')
         .select('id', { count: 'exact' })
         .eq('moderation_status', 'approved');
         // Removed today filter to match findSimilarPosts scope
 
-      // Apply scope filtering
+      // Apply scope filtering based on hierarchy
+      // City posts only match city posts, state posts match city+state, etc.
       switch (scope) {
         case 'city':
           if (locationCity) {
+            // City scope: count only city posts in this city
             query = query.eq('location_city', locationCity).eq('scope', 'city');
           }
           break;
         case 'state':
           if (locationState) {
+            // State scope: count city + state posts in this state
             query = query.eq('location_state', locationState).in('scope', ['city', 'state']);
           }
           break;
         case 'country':
           if (locationCountry) {
+            // Country scope: count city + state + country posts in this country
             query = query.eq('location_country', locationCountry).in('scope', ['city', 'state', 'country']);
           }
           break;
         case 'world':
         default:
-          // No additional filtering for world scope
+          // World scope: count all posts globally
           break;
       }
 
@@ -414,7 +472,13 @@ export class PostService {
         return 1; // Fallback to 1 to avoid division by zero
       }
 
-      return Math.max(count || 1, 1); // Ensure at least 1
+      const result = Math.max(count || 1, 1); // Ensure at least 1
+      
+      // Cache the result for 2 minutes (counts change frequently)
+      await cacheSet(countCacheKey, result, 120);
+      console.log('✅ Total posts count cached');
+      
+      return result;
     } catch (error) {
       console.error('❌ Count query error:', error);
       return 1;
@@ -436,25 +500,37 @@ export class PostService {
     try {
       console.log('🔍 Calculating temporal analytics for:', contentHash);
 
-      // Build scope condition
-      let scopeCondition = 'TRUE';
-      if (scope === 'city' && locationCity) {
-        scopeCondition = `location_city = '${locationCity}' AND scope = 'city'`;
-      } else if (scope === 'state' && locationState) {
-        scopeCondition = `location_state = '${locationState}' AND scope IN ('city', 'state')`;
-      } else if (scope === 'country' && locationCountry) {
-        scopeCondition = `location_country = '${locationCountry}' AND scope IN ('city', 'state', 'country')`;
+      // Check cache first for temporal analytics
+      const temporalCacheKey = CacheKeys.temporalAnalytics(contentHash, scope);
+      const cachedTemporal = await cacheGet<any>(temporalCacheKey);
+      if (cachedTemporal) {
+        console.log('✅ Using cached temporal analytics');
+        return cachedTemporal;
       }
+
+      // Scope hierarchy will be applied to each query individually
 
       // Calculate today stats
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
       
-      const { data: todayData, error: todayError } = await this.supabase
+      let todayQuery = this.supabase
         .from('posts')
         .select('id')
         .eq('moderation_status', 'approved')
         .gte('created_at', todayStart.toISOString());
+
+      // Apply scope hierarchy to today query
+      if (scope === 'city' && locationCity) {
+        todayQuery = todayQuery.eq('location_city', locationCity).eq('scope', 'city');
+      } else if (scope === 'state' && locationState) {
+        todayQuery = todayQuery.eq('location_state', locationState).in('scope', ['city', 'state']);
+      } else if (scope === 'country' && locationCountry) {
+        todayQuery = todayQuery.eq('location_country', locationCountry).in('scope', ['city', 'state', 'country']);
+      }
+      // World scope: no additional filtering
+
+      const { data: todayData, error: todayError } = await todayQuery;
 
       // Use semantic similarity for temporal matching (same as main system)
       const todayMatchingData = await this.findSimilarPostsInTimeframe(
@@ -472,11 +548,23 @@ export class PostService {
       const weekStart = new Date();
       weekStart.setDate(weekStart.getDate() - 7);
       
-      const { data: weekData, error: weekError } = await this.supabase
+      let weekQuery = this.supabase
         .from('posts')
         .select('id')
         .eq('moderation_status', 'approved')
         .gte('created_at', weekStart.toISOString());
+
+      // Apply scope hierarchy to week query
+      if (scope === 'city' && locationCity) {
+        weekQuery = weekQuery.eq('location_city', locationCity).eq('scope', 'city');
+      } else if (scope === 'state' && locationState) {
+        weekQuery = weekQuery.eq('location_state', locationState).in('scope', ['city', 'state']);
+      } else if (scope === 'country' && locationCountry) {
+        weekQuery = weekQuery.eq('location_country', locationCountry).in('scope', ['city', 'state', 'country']);
+      }
+      // World scope: no additional filtering
+
+      const { data: weekData, error: weekError } = await weekQuery;
 
       // Use semantic similarity for week matching
       const weekMatchingData = await this.findSimilarPostsInTimeframe(
@@ -494,11 +582,23 @@ export class PostService {
       const monthStart = new Date();
       monthStart.setMonth(monthStart.getMonth() - 1);
       
-      const { data: monthData, error: monthError } = await this.supabase
+      let monthQuery = this.supabase
         .from('posts')
         .select('id')
         .eq('moderation_status', 'approved')
         .gte('created_at', monthStart.toISOString());
+
+      // Apply scope hierarchy to month query
+      if (scope === 'city' && locationCity) {
+        monthQuery = monthQuery.eq('location_city', locationCity).eq('scope', 'city');
+      } else if (scope === 'state' && locationState) {
+        monthQuery = monthQuery.eq('location_state', locationState).in('scope', ['city', 'state']);
+      } else if (scope === 'country' && locationCountry) {
+        monthQuery = monthQuery.eq('location_country', locationCountry).in('scope', ['city', 'state', 'country']);
+      }
+      // World scope: no additional filtering
+
+      const { data: monthData, error: monthError } = await monthQuery;
 
       // Use semantic similarity for month matching
       const monthMatchingData = await this.findSimilarPostsInTimeframe(
@@ -516,17 +616,17 @@ export class PostService {
       // Add 1 to totals to account for the current post being created
       const todayTotal = (todayData?.length || 0) + 1;
       const todayMatching = (todayMatchingData?.length || 0) + 1; // Current post matches itself
-      const todayPercentile = todayTotal > 0 ? ((todayTotal - todayMatching) / todayTotal) * 100 : 0;
+      const todayPercentile = todayTotal > 0 ? (todayMatching / todayTotal) * 100 : 0;
       const todayTier = this.calculateTier(todayPercentile);
 
       const weekTotal = (weekData?.length || 0) + 1;
       const weekMatching = (weekMatchingData?.length || 0) + 1; // Current post matches itself
-      const weekPercentile = weekTotal > 0 ? ((weekTotal - weekMatching) / weekTotal) * 100 : 0;
+      const weekPercentile = weekTotal > 0 ? (weekMatching / weekTotal) * 100 : 0;
       const weekTier = this.calculateTier(weekPercentile);
 
       const monthTotal = (monthData?.length || 0) + 1;
       const monthMatching = (monthMatchingData?.length || 0) + 1; // Current post matches itself
-      const monthPercentile = monthTotal > 0 ? ((monthTotal - monthMatching) / monthTotal) * 100 : 0;
+      const monthPercentile = monthTotal > 0 ? (monthMatching / monthTotal) * 100 : 0;
       const monthTier = this.calculateTier(monthPercentile);
 
       const result = {
@@ -535,39 +635,44 @@ export class PostService {
           matching: todayMatching,
           percentile: Math.round(todayPercentile * 100) / 100,
           tier: todayTier,
-          comparison: todayMatching === 0 ? 'Only you!' : `${todayMatching} of ${todayTotal}`
+          comparison: todayMatching <= 1 ? 'Only you!' : `${todayMatching} of ${todayTotal}`
         },
         week: {
           total: weekTotal,
-          matches: weekMatching,
+          matching: weekMatching,
           percentile: Math.round(weekPercentile * 100) / 100,
           tier: weekTier,
-          comparison: weekMatching === 0 ? 'Only you!' : `${weekMatching} of ${weekTotal}`
+          comparison: weekMatching <= 1 ? 'Only you!' : `${weekMatching} of ${weekTotal}`
         },
         month: {
           total: monthTotal,
-          matches: monthMatching,
+          matching: monthMatching,
           percentile: Math.round(monthPercentile * 100) / 100,
           tier: monthTier,
-          comparison: monthMatching === 0 ? 'Only you!' : `${monthMatching} of ${monthTotal}`
+          comparison: monthMatching <= 1 ? 'Only you!' : `${monthMatching} of ${monthTotal}`
         },
         year: {
           total: monthTotal, // Use month data for year (since we don't have year data yet)
-          matches: monthMatching,
+          matching: monthMatching,
           percentile: Math.round(monthPercentile * 100) / 100,
           tier: monthTier,
-          comparison: monthMatching === 0 ? 'Only you!' : `${monthMatching} of ${monthTotal}`
+          comparison: monthMatching <= 1 ? 'Only you!' : `${monthMatching} of ${monthTotal}`
         },
         allTime: {
           total: monthTotal, // Use month data for allTime (since we don't have allTime data yet)
-          matches: monthMatching,
+          matching: monthMatching,
           percentile: Math.round(monthPercentile * 100) / 100,
           tier: monthTier,
-          comparison: monthMatching === 0 ? 'Only you!' : `${monthMatching} of ${monthTotal}`
+          comparison: monthMatching <= 1 ? 'Only you!' : `${monthMatching} of ${monthTotal}`
         }
       };
 
       console.log('📊 Calculated temporal analytics:', result);
+      
+      // Cache the temporal analytics result
+      await cacheSet(temporalCacheKey, result, CacheTTL.TEMPORAL_ANALYTICS);
+      console.log('✅ Temporal analytics cached');
+      
       return result;
     } catch (error) {
       console.error('❌ Temporal analytics error:', error);
@@ -587,7 +692,7 @@ export class PostService {
     if (percentile >= 80) return 'rare';
     if (percentile >= 60) return 'unique';
     if (percentile >= 40) return 'notable';
-    if (percentile >= 20) return 'common';
+    if (percentile >= 20) return 'beloved';
     return 'popular';
   }
 

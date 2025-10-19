@@ -39,13 +39,19 @@ export class DaySummaryService {
       };
     }
 
-    // Check for day summary indicators
+    // Check for day summary indicators (expanded to include emotional expressions)
     const dayIndicators = [
       'today', 'yesterday', 'this morning', 'this afternoon', 'this evening',
       'went to', 'did', 'had', 'ate', 'drank', 'saw', 'met', 'talked to',
       'worked on', 'studied', 'exercised', 'played', 'watched', 'listened to',
       'read', 'wrote', 'cooked', 'cleaned', 'shopped', 'drove', 'walked',
-      'called', 'texted', 'emailed', 'visited', 'traveled', 'slept'
+      'called', 'texted', 'emailed', 'visited', 'traveled', 'slept',
+      // Emotional and reflective expressions
+      'felt', 'was', 'were', 'am', 'is', 'are', 'wasted', 'spent', 'time',
+      'lazy', 'productive', 'unproductive', 'boring', 'interesting', 'terrible',
+      'amazing', 'awful', 'great', 'bad', 'good', 'difficult', 'easy',
+      'stressed', 'relaxed', 'tired', 'energetic', 'sad', 'happy', 'angry',
+      'frustrated', 'excited', 'nervous', 'calm', 'worried', 'confident'
     ];
 
     const lowerContent = content.toLowerCase();
@@ -146,13 +152,15 @@ export class DaySummaryService {
 
       const activities = extractionResult.activities;
       
+      // Allow day summaries even if no specific activities can be extracted
+      // This allows for emotional expressions and general day descriptions
       if (activities.length === 0) {
+        console.log('📝 No specific activities extracted, but allowing as valid day summary');
         return {
-          activities: [],
-          activityCount: 0,
-          activityEmbeddings: [],
-          isValid: false,
-          error: 'No activities could be extracted from the day summary'
+          activities: [content], // Use the full content as a single "activity"
+          activityCount: 1,
+          activityEmbeddings: [], // Will be generated later
+          isValid: true
         };
       }
 

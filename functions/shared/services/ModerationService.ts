@@ -82,7 +82,7 @@ export class ModerationService {
   private async checkToxicity(content: string): Promise<{ score: number; flags: string[] }> {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
 
       const response = await fetch(`${this.hfApiUrl}/unitary/toxic-bert`, {
         method: 'POST',
