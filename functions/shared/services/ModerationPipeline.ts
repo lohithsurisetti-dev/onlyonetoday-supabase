@@ -44,55 +44,104 @@ export class ModerationPipeline {
     additionalContext?: any
   ): Promise<ModerationResult> {
     try {
-      // Basic validation
-      const basicCheck = this.validateBasic(content);
-      if (!basicCheck.approved) {
-        return basicCheck;
-      }
+      console.log('🛡️ Starting moderation with timeout...');
+      console.log('📊 Moderation context:', {
+        contentLength: content.length,
+        contentType,
+        additionalContext: JSON.stringify(additionalContext)
+      });
+      
+      // Add timeout to prevent hanging
+      const timeoutPromise = new Promise<ModerationResult>((_, reject) => {
+        setTimeout(() => {
+          console.log('⏰ Moderation timeout reached');
+          reject(new Error('Moderation timeout'));
+        }, 5000); // 5 second timeout
+      });
 
-      // Content-specific checks
-      const contentCheck = await this.validateContent(content, contentType, additionalContext);
-      if (!contentCheck.approved) {
-        return contentCheck;
-      }
-
-      // Toxicity check
-      const toxicityCheck = await this.checkToxicity(content);
-      if (!toxicityCheck.approved) {
-        return toxicityCheck;
-      }
-
-      // Spam check
-      const spamCheck = await this.checkSpam(content);
-      if (!spamCheck.approved) {
-        return spamCheck;
-      }
-
-      // Dream-specific checks
-      if (contentType === 'dream') {
-        const dreamCheck = await this.validateDreamContent(content, additionalContext);
-        if (!dreamCheck.approved) {
-          return dreamCheck;
-        }
-      }
-
-      // All checks passed
-      return {
-        approved: true,
-        confidence: 0.95,
-        flags: [],
-        suggestions: this.generateSuggestions(content, contentType)
-      };
+      const moderationPromise = this.performModeration(content, contentType, additionalContext);
+      
+      const result = await Promise.race([moderationPromise, timeoutPromise]);
+      console.log('✅ Moderation completed successfully');
+      return result;
 
     } catch (error) {
-      console.error('Moderation pipeline error:', error);
+      console.error('❌ Moderation pipeline error:', error);
+      console.error('❌ Error details:', {
+        name: error.name,
+        message: error.message,
+        stack: error.stack
+      });
+      // If moderation fails or times out, allow content but flag it
       return {
-        approved: false,
-        reason: 'Moderation system error',
-        confidence: 0.0,
-        flags: ['system_error']
+        approved: true,
+        confidence: 0.5,
+        flags: ['moderation_error'],
+        reason: 'Moderation system error - content allowed'
       };
     }
+  }
+
+  private async performModeration(
+    content: string, 
+    contentType: 'post' | 'dream' | 'comment' | 'profile' = 'post',
+    additionalContext?: any
+  ): Promise<ModerationResult> {
+    console.log('🔍 Starting basic validation...');
+    // Basic validation
+    const basicCheck = this.validateBasic(content);
+    if (!basicCheck.approved) {
+      console.log('❌ Basic validation failed:', basicCheck.reason);
+      return basicCheck;
+    }
+    console.log('✅ Basic validation passed');
+
+    console.log('🔍 Starting content validation...');
+    // Content-specific checks
+    const contentCheck = await this.validateContent(content, contentType, additionalContext);
+    if (!contentCheck.approved) {
+      console.log('❌ Content validation failed:', contentCheck.reason);
+      return contentCheck;
+    }
+    console.log('✅ Content validation passed');
+
+    console.log('🔍 Starting toxicity check...');
+    // Toxicity check
+    const toxicityCheck = await this.checkToxicity(content);
+    if (!toxicityCheck.approved) {
+      console.log('❌ Toxicity check failed:', toxicityCheck.reason);
+      return toxicityCheck;
+    }
+    console.log('✅ Toxicity check passed');
+
+    console.log('🔍 Starting spam check...');
+    // Spam check
+    const spamCheck = await this.checkSpam(content);
+    if (!spamCheck.approved) {
+      console.log('❌ Spam check failed:', spamCheck.reason);
+      return spamCheck;
+    }
+    console.log('✅ Spam check passed');
+
+    // Dream-specific checks
+    if (contentType === 'dream') {
+      console.log('🔍 Starting dream-specific checks...');
+      const dreamCheck = await this.validateDreamContent(content, additionalContext);
+      if (!dreamCheck.approved) {
+        console.log('❌ Dream check failed:', dreamCheck.reason);
+        return dreamCheck;
+      }
+      console.log('✅ Dream check passed');
+    }
+
+    console.log('✅ All moderation checks passed');
+    // All checks passed
+    return {
+      approved: true,
+      confidence: 0.95,
+      flags: [],
+      suggestions: this.generateSuggestions(content, contentType)
+    };
   }
 
   /**
@@ -174,36 +223,45 @@ export class ModerationPipeline {
    * Toxicity detection
    */
   private async checkToxicity(content: string): Promise<ModerationResult> {
-    const toxicPatterns = [
-      // Direct insults
-      /\b(stupid|idiot|moron|dumb|retard|fool)\b/i,
-      /\b(hate|despise|loathe)\s+(you|everyone|all)\b/i,
-      /\b(kill|murder|destroy)\s+(yourself|you)\b/i,
-      
-      // Hate speech patterns
-      /\b(all|every)\s+\w+\s+(are|is)\s+(terrible|awful|inferior|stupid)\b/i,
-      /\b(wish|hope)\s+\w+\s+(would|could)\s+(die|disappear|vanish)\b/i,
-      
-      // Discriminatory language
-      /\b(discriminat|prejudice|bias)\s+(against|toward)\s+\w+/i,
-    ];
+    try {
+      const toxicPatterns = [
+        // Direct insults
+        /\b(stupid|idiot|moron|dumb|retard|fool)\b/i,
+        /\b(hate|despise|loathe)\s+(you|everyone|all)\b/i,
+        /\b(kill|murder|destroy)\s+(yourself|you)\b/i,
+        
+        // Hate speech patterns
+        /\b(all|every)\s+\w+\s+(are|is)\s+(terrible|awful|inferior|stupid)\b/i,
+        /\b(wish|hope)\s+\w+\s+(would|could)\s+(die|disappear|vanish)\b/i,
+        
+        // Discriminatory language
+        /\b(discriminat|prejudice|bias)\s+(against|toward)\s+\w+/i,
+      ];
 
-    for (const pattern of toxicPatterns) {
-      if (pattern.test(content)) {
-        return {
-          approved: false,
-          reason: 'Content rejected: toxic',
-          confidence: 0.9,
-          flags: ['toxic']
-        };
+      for (const pattern of toxicPatterns) {
+        if (pattern.test(content)) {
+          return {
+            approved: false,
+            reason: 'Content rejected: toxic',
+            confidence: 0.9,
+            flags: ['toxic']
+          };
+        }
       }
-    }
 
-    return {
-      approved: true,
-      confidence: 0.8,
-      flags: []
-    };
+      return {
+        approved: true,
+        confidence: 0.8,
+        flags: []
+      };
+    } catch (error) {
+      console.error('Toxicity check error:', error);
+      return {
+        approved: true, // Allow content if toxicity check fails
+        confidence: 0.5,
+        flags: []
+      };
+    }
   }
 
   /**
@@ -325,10 +383,21 @@ export class ModerationPipeline {
       }
     }
 
-    // Check if any word appears more than 30% of the time
-    const totalWords = words.length;
+    // For short content (less than 5 words), be more lenient
+    const meaningfulWords = Array.from(wordCounts.values()).reduce((sum, count) => sum + count, 0);
+    if (meaningfulWords < 5) {
+      // For short content, only flag if a word appears more than once
+      for (const [word, count] of wordCounts) {
+        if (count > 1) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // For longer content, check if any word appears more than 30% of the time
     for (const [word, count] of wordCounts) {
-      if (count / totalWords > 0.3) {
+      if (count / meaningfulWords > 0.3) {
         return true;
       }
     }

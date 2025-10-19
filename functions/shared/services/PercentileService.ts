@@ -28,54 +28,11 @@ export class PercentileService {
     peopleWhoDidThis: number,
     totalPostsInScope: number
   ): PercentileResult {
-    // Edge case: Small dataset (< 10 posts) - still calculate tier based on percentile
-    if (totalPostsInScope < 10) {
-      const percentile = (peopleWhoDidThis / totalPostsInScope) * 100;
-      
-      // Determine tier even for small datasets
-      // IMPORTANT: For small datasets, we use absolute counts, not percentiles
-      // 1 of 1 = ELITE (only you!)
-      // 1 of 5 = UNIQUE (20%)
-      // 2 of 5 = NOTABLE (40%)
-      let tier: PercentileResult['tier'] = 'common';
-      let badge = '✅';
-      
-      if (peopleWhoDidThis === 1) {
-        // Only you did this = most unique!
-        tier = 'elite';
-        badge = '🏆';
-      } else if (percentile <= 20) {
-        tier = 'unique';
-        badge = '⭐';
-      } else if (percentile <= 40) {
-        tier = 'notable';
-        badge = '✨';
-      } else if (percentile <= 60) {
-        tier = 'common';
-        badge = '✅';
-      } else {
-        tier = 'popular';
-        badge = '👥';
-      }
-      
-      return {
-        percentile,
-        tier,
-        displayText: peopleWhoDidThis === 1 ? 'Only you!' : `${peopleWhoDidThis} of ${totalPostsInScope}`,
-        badge,
-        message: peopleWhoDidThis === 1 
-          ? "You're a unicorn! Only you did this! 🦄"
-          : `You're one of ${peopleWhoDidThis} people who did this!`,
-        comparison: `${peopleWhoDidThis} of ${totalPostsInScope} people`
-      };
-    }
-    
     // Calculate percentile (what % of population did this)
     const percentile = (peopleWhoDidThis / totalPostsInScope) * 100;
     
-    // Determine tier and messaging based on percentile
-    if (percentile < 0.1) {
-      // ELITE: Only you! (< 0.1%)
+    // CRITICAL: If you're the only person who did this, it's always ELITE regardless of dataset size
+    if (peopleWhoDidThis === 1) {
       return {
         percentile,
         tier: 'elite',
@@ -84,8 +41,23 @@ export class PercentileService {
         message: "You're a unicorn! Only you did this! 🦄",
         comparison: `Only you out of ${totalPostsInScope.toLocaleString()} people`
       };
-    } else if (percentile < 1) {
-      // ELITE: Top 1% (0.1% - 1%)
+    }
+    
+    // Determine tier and messaging based on percentile for multiple people
+    // Rebalanced for social media psychology and daily activity patterns
+    if (percentile < 0.5) {
+      // ELITE: Top 0.5% (< 0.5%) - More accessible than 0.1%
+      const formattedPercentile = percentile < 0.5 ? percentile.toFixed(1) : Math.round(percentile);
+      return {
+        percentile,
+        tier: 'elite',
+        displayText: `Top ${formattedPercentile}%`,
+        badge: '🏆',
+        message: `You're in the elite ${formattedPercentile}%! Rarer than ${(100 - percentile).toFixed(1)}% of people!`,
+        comparison: `${peopleWhoDidThis} of ${totalPostsInScope.toLocaleString()} people`
+      };
+    } else if (percentile < 2) {
+      // ELITE: Top 2% (0.5% - 2%) - Expanded elite range for motivation
       const formattedPercentile = percentile < 1 ? percentile.toFixed(1) : Math.round(percentile);
       return {
         percentile,
@@ -95,8 +67,8 @@ export class PercentileService {
         message: `You're in the elite ${formattedPercentile}%! Rarer than ${(100 - percentile).toFixed(1)}% of people!`,
         comparison: `${peopleWhoDidThis} of ${totalPostsInScope.toLocaleString()} people`
       };
-    } else if (percentile < 5) {
-      // RARE: Top 5% (1% - 5%)
+    } else if (percentile < 8) {
+      // RARE: Top 8% (2% - 8%) - Expanded for daily uniqueness
       const formattedPercentile = Math.round(percentile);
       return {
         percentile,
@@ -106,8 +78,8 @@ export class PercentileService {
         message: `Highly exclusive! You're in the top ${formattedPercentile}%!`,
         comparison: `${peopleWhoDidThis} of ${totalPostsInScope.toLocaleString()} people`
       };
-    } else if (percentile < 10) {
-      // UNIQUE: Top 10% (5% - 10%)
+    } else if (percentile < 20) {
+      // UNIQUE: Top 20% (8% - 20%) - More realistic for daily activities
       const formattedPercentile = Math.round(percentile);
       return {
         percentile,
@@ -117,19 +89,19 @@ export class PercentileService {
         message: `Nice! You're in the top ${formattedPercentile}%!`,
         comparison: `${peopleWhoDidThis} of ${totalPostsInScope.toLocaleString()} people`
       };
-    } else if (percentile < 25) {
-      // NOTABLE: Top 25% (10% - 25%)
+    } else if (percentile < 40) {
+      // NOTABLE: Top 40% (20% - 40%) - Expanded notable range
       const formattedPercentile = Math.round(percentile);
       return {
         percentile,
         tier: 'notable',
         displayText: `Top ${formattedPercentile}%`,
         badge: '✨',
-        message: `You're in the top quarter!`,
+        message: `You're in the top ${formattedPercentile}%!`,
         comparison: `${peopleWhoDidThis} of ${totalPostsInScope.toLocaleString()} people`
       };
-    } else if (percentile < 50) {
-      // COMMON: Top 50% (25% - 50%)
+    } else if (percentile < 70) {
+      // COMMON: Top 70% (40% - 70%) - Realistic for common activities
       const formattedPercentile = Math.round(percentile);
       return {
         percentile,
@@ -140,7 +112,7 @@ export class PercentileService {
         comparison: `${peopleWhoDidThis} of ${totalPostsInScope.toLocaleString()} people`
       };
     } else {
-      // POPULAR: > 50%
+      // POPULAR: > 70% - Only truly common activities
       const formattedPercentile = Math.round(percentile);
       return {
         percentile,
@@ -230,14 +202,16 @@ export class PercentileService {
 
   /**
    * Get tier from percentile number
+   * Note: This method doesn't handle the "only you" case - use calculatePercentile for that
+   * Updated to match the rebalanced social media psychology tiers
    */
   getTierFromPercentile(percentile: number): PercentileResult['tier'] {
-    if (percentile < 0.1) return 'elite';
-    if (percentile < 1) return 'elite';
-    if (percentile < 5) return 'rare';
-    if (percentile < 10) return 'unique';
-    if (percentile < 25) return 'notable';
-    if (percentile < 50) return 'common';
+    if (percentile < 0.5) return 'elite';
+    if (percentile < 2) return 'elite';
+    if (percentile < 8) return 'rare';
+    if (percentile < 20) return 'unique';
+    if (percentile < 40) return 'notable';
+    if (percentile < 70) return 'common';
     return 'popular';
   }
 

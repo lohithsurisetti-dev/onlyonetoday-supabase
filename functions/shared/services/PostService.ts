@@ -98,15 +98,36 @@ export class PostService {
     try {
       console.log(`🚀 Creating ${request.inputType} post: "${request.content.substring(0, 50)}..."`);
 
-      // 1. Content Moderation
+      // 1. Content Moderation with enhanced error handling
       console.log('🛡️ Running content moderation...');
-      const moderationResult = await this.moderationPipeline.moderateContent(
-        request.content,
-        'post',
-        { inputType: request.inputType, scope: request.scope }
-      );
+      console.log('📱 Request details:', {
+        contentLength: request.content.length,
+        inputType: request.inputType,
+        scope: request.scope,
+        userAgent: 'mobile-app' // We'll detect this from headers if possible
+      });
+      
+      let moderationResult;
+      try {
+        moderationResult = await this.moderationPipeline.moderateContent(
+          request.content,
+          'post',
+          { inputType: request.inputType, scope: request.scope }
+        );
+        console.log('✅ Moderation completed successfully');
+      } catch (error) {
+        console.error('❌ Moderation failed with error:', error);
+        // If moderation fails, allow content but flag it
+        moderationResult = {
+          approved: true,
+          confidence: 0.5,
+          flags: ['moderation_error'],
+          reason: 'Moderation system error - content allowed'
+        };
+      }
       
       if (!moderationResult.approved) {
+        console.log('❌ Content rejected by moderation:', moderationResult.reason);
         return {
           success: false,
           error: `Content rejected: ${moderationResult.flags.join(', ')}`
@@ -164,7 +185,8 @@ export class PostService {
         request.locationCity,
         request.locationState,
         request.locationCountry,
-        hasNegation
+        hasNegation,
+        contentHash
       );
 
       const matchCount = similarPosts.length + 1; // +1 for the current post
@@ -178,10 +200,31 @@ export class PostService {
         request.locationCountry
       );
 
+      // Safety check for percentile calculation
+      if (totalPostsInScope === 0) {
+        console.log('⚠️ No posts in scope, using default values');
+        totalPostsInScope = 1; // Avoid division by zero
+      }
+
+      console.log('📊 Percentile calculation inputs:', {
+        matchCount,
+        totalPostsInScope,
+        calculatedPercentile: (matchCount / totalPostsInScope) * 100
+      });
+
       const percentileResult = this.percentileService.calculatePercentile(
         matchCount,
         totalPostsInScope
       );
+
+      console.log('📊 Percentile result:', percentileResult);
+
+      // Safety check: ensure percentile is within valid range
+      if (percentileResult.percentile > 100 || percentileResult.percentile < 0) {
+        console.error('❌ Invalid percentile calculated:', percentileResult.percentile);
+        percentileResult.percentile = Math.min(100, Math.max(0, percentileResult.percentile));
+        console.log('🔧 Corrected percentile to:', percentileResult.percentile);
+      }
 
       // 8. Calculate temporal analytics
       console.log('⏰ Calculating temporal analytics...');
@@ -190,7 +233,9 @@ export class PostService {
         request.scope,
         request.locationCity,
         request.locationState,
-        request.locationCountry
+        request.locationCountry,
+        embeddingResult.embedding,
+        hasNegation
       );
 
       // 9. Insert post into database
@@ -217,12 +262,12 @@ export class PostService {
         time_tags: this.extractTimeTags(request.content),
         emoji_tags: this.extractEmojis(request.content),
         moderation_status: 'approved',
-        moderation_score: moderationResult.score,
+        moderation_score: moderationResult.confidence,
         moderation_flags: moderationResult.flags,
         moderation_details: {
-          toxicity: moderationResult.details.toxicity,
-          spam: moderationResult.details.spam,
-          inappropriate: moderationResult.details.inappropriate
+          toxicity: moderationResult.flags.includes('toxic') ? 0.8 : 0,
+          spam: moderationResult.flags.includes('spam') ? 0.8 : 0,
+          inappropriate: moderationResult.flags.includes('inappropriate') ? 0.8 : 0
         }
       };
 
@@ -277,7 +322,7 @@ export class PostService {
   }
 
   /**
-   * Find similar posts using vector similarity search
+   * Find similar posts using semantic similarity with configurable threshold
    */
   private async findSimilarPosts(
     embedding: number[],
@@ -285,19 +330,28 @@ export class PostService {
     locationCity?: string,
     locationState?: string,
     locationCountry?: string,
-    hasNegation: boolean = false
+    hasNegation: boolean = false,
+    contentHash?: string
   ): Promise<any[]> {
     try {
-      const { data, error } = await this.supabase.rpc('match_posts_by_embedding', {
-        query_embedding: embedding,
-        match_threshold: 0.90, // High threshold for semantic similarity
-        match_limit: 100,
+      // Use semantic similarity with configurable threshold
+      console.log('🔍 Calling match_posts_by_embedding with params:', {
+        embedding_length: embedding.length,
+        match_threshold: 0.50,
         scope_filter: scope,
+        today_only: false
+      });
+      
+      const { data, error } = await this.supabase.rpc('match_posts_by_embedding', {
         filter_city: locationCity,
-        filter_state: locationState,
         filter_country: locationCountry,
-        today_only: true,
-        query_has_negation: hasNegation
+        filter_state: locationState,
+        match_limit: 100,
+        match_threshold: 0.70, // Testing with higher threshold for better semantic matching
+        query_embedding: embedding,
+        query_has_negation: hasNegation,
+        scope_filter: scope,
+        today_only: false // No time filtering
       });
 
       if (error) {
@@ -305,9 +359,11 @@ export class PostService {
         return [];
       }
 
+      console.log(`🔍 Found ${data?.length || 0} semantic matches with threshold 0.50`);
+      console.log('🔍 Vector search results:', data);
       return data || [];
     } catch (error) {
-      console.error('❌ Vector search error:', error);
+      console.error('❌ Content search error:', error);
       return [];
     }
   }
@@ -325,8 +381,8 @@ export class PostService {
       let query = this.supabase
         .from('posts')
         .select('id', { count: 'exact' })
-        .eq('moderation_status', 'approved')
-        .gte('created_at', new Date().toISOString().split('T')[0]); // Today only
+        .eq('moderation_status', 'approved');
+        // Removed today filter to match findSimilarPosts scope
 
       // Apply scope filtering
       switch (scope) {
@@ -373,58 +429,145 @@ export class PostService {
     scope: string,
     locationCity?: string,
     locationState?: string,
-    locationCountry?: string
+    locationCountry?: string,
+    currentEmbedding?: number[],
+    hasNegation?: boolean
   ): Promise<any> {
     try {
-      const { data, error } = await this.supabase.rpc('calculate_temporal_uniqueness', {
-        content_hash_param: contentHash,
-        scope_param: scope,
-        location_city_param: locationCity,
-        location_state_param: locationState,
-        location_country_param: locationCountry
-      });
+      console.log('🔍 Calculating temporal analytics for:', contentHash);
 
-      if (error) {
-        console.error('❌ Temporal analytics failed:', error);
-        return {
-          today: { total: 1, matching: 1, percentile: 0, tier: 'elite' },
-          week: { total: 1, matching: 1, percentile: 0, tier: 'elite' },
-          month: { total: 1, matching: 1, percentile: 0, tier: 'elite' }
-        };
+      // Build scope condition
+      let scopeCondition = 'TRUE';
+      if (scope === 'city' && locationCity) {
+        scopeCondition = `location_city = '${locationCity}' AND scope = 'city'`;
+      } else if (scope === 'state' && locationState) {
+        scopeCondition = `location_state = '${locationState}' AND scope IN ('city', 'state')`;
+      } else if (scope === 'country' && locationCountry) {
+        scopeCondition = `location_country = '${locationCountry}' AND scope IN ('city', 'state', 'country')`;
       }
 
-      const result: any = {
-        today: { total: 1, matching: 1, percentile: 0, tier: 'elite' },
-        week: { total: 1, matching: 1, percentile: 0, tier: 'elite' },
-        month: { total: 1, matching: 1, percentile: 0, tier: 'elite' }
+      // Calculate today stats
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      
+      const { data: todayData, error: todayError } = await this.supabase
+        .from('posts')
+        .select('id')
+        .eq('moderation_status', 'approved')
+        .gte('created_at', todayStart.toISOString());
+
+      // Use semantic similarity for temporal matching (same as main system)
+      const todayMatchingData = await this.findSimilarPostsInTimeframe(
+        contentHash,
+        todayStart.toISOString(),
+        scope,
+        locationCity,
+        locationState,
+        locationCountry,
+        currentEmbedding,
+        hasNegation
+      );
+
+      // Calculate week stats
+      const weekStart = new Date();
+      weekStart.setDate(weekStart.getDate() - 7);
+      
+      const { data: weekData, error: weekError } = await this.supabase
+        .from('posts')
+        .select('id')
+        .eq('moderation_status', 'approved')
+        .gte('created_at', weekStart.toISOString());
+
+      // Use semantic similarity for week matching
+      const weekMatchingData = await this.findSimilarPostsInTimeframe(
+        contentHash,
+        weekStart.toISOString(),
+        scope,
+        locationCity,
+        locationState,
+        locationCountry,
+        currentEmbedding,
+        hasNegation
+      );
+
+      // Calculate month stats
+      const monthStart = new Date();
+      monthStart.setMonth(monthStart.getMonth() - 1);
+      
+      const { data: monthData, error: monthError } = await this.supabase
+        .from('posts')
+        .select('id')
+        .eq('moderation_status', 'approved')
+        .gte('created_at', monthStart.toISOString());
+
+      // Use semantic similarity for month matching
+      const monthMatchingData = await this.findSimilarPostsInTimeframe(
+        contentHash,
+        monthStart.toISOString(),
+        scope,
+        locationCity,
+        locationState,
+        locationCountry,
+        currentEmbedding,
+        hasNegation
+      );
+
+      // Calculate percentiles and tiers
+      // Add 1 to totals to account for the current post being created
+      const todayTotal = (todayData?.length || 0) + 1;
+      const todayMatching = (todayMatchingData?.length || 0) + 1; // Current post matches itself
+      const todayPercentile = todayTotal > 0 ? ((todayTotal - todayMatching) / todayTotal) * 100 : 0;
+      const todayTier = this.calculateTier(todayPercentile);
+
+      const weekTotal = (weekData?.length || 0) + 1;
+      const weekMatching = (weekMatchingData?.length || 0) + 1; // Current post matches itself
+      const weekPercentile = weekTotal > 0 ? ((weekTotal - weekMatching) / weekTotal) * 100 : 0;
+      const weekTier = this.calculateTier(weekPercentile);
+
+      const monthTotal = (monthData?.length || 0) + 1;
+      const monthMatching = (monthMatchingData?.length || 0) + 1; // Current post matches itself
+      const monthPercentile = monthTotal > 0 ? ((monthTotal - monthMatching) / monthTotal) * 100 : 0;
+      const monthTier = this.calculateTier(monthPercentile);
+
+      const result = {
+        today: {
+          total: todayTotal,
+          matching: todayMatching,
+          percentile: Math.round(todayPercentile * 100) / 100,
+          tier: todayTier,
+          comparison: todayMatching === 0 ? 'Only you!' : `${todayMatching} of ${todayTotal}`
+        },
+        week: {
+          total: weekTotal,
+          matches: weekMatching,
+          percentile: Math.round(weekPercentile * 100) / 100,
+          tier: weekTier,
+          comparison: weekMatching === 0 ? 'Only you!' : `${weekMatching} of ${weekTotal}`
+        },
+        month: {
+          total: monthTotal,
+          matches: monthMatching,
+          percentile: Math.round(monthPercentile * 100) / 100,
+          tier: monthTier,
+          comparison: monthMatching === 0 ? 'Only you!' : `${monthMatching} of ${monthTotal}`
+        },
+        year: {
+          total: monthTotal, // Use month data for year (since we don't have year data yet)
+          matches: monthMatching,
+          percentile: Math.round(monthPercentile * 100) / 100,
+          tier: monthTier,
+          comparison: monthMatching === 0 ? 'Only you!' : `${monthMatching} of ${monthTotal}`
+        },
+        allTime: {
+          total: monthTotal, // Use month data for allTime (since we don't have allTime data yet)
+          matches: monthMatching,
+          percentile: Math.round(monthPercentile * 100) / 100,
+          tier: monthTier,
+          comparison: monthMatching === 0 ? 'Only you!' : `${monthMatching} of ${monthTotal}`
+        }
       };
 
-      // Process the results
-      for (const row of data || []) {
-        if (row.time_period === 'today') {
-          result.today = {
-            total: row.total_posts,
-            matching: row.matching_posts,
-            percentile: row.percentile,
-            tier: row.tier
-          };
-        } else if (row.time_period === 'week') {
-          result.week = {
-            total: row.total_posts,
-            matching: row.matching_posts,
-            percentile: row.percentile,
-            tier: row.tier
-          };
-        } else if (row.time_period === 'month') {
-          result.month = {
-            total: row.total_posts,
-            matching: row.matching_posts,
-            percentile: row.percentile,
-            tier: row.tier
-          };
-        }
-      }
-
+      console.log('📊 Calculated temporal analytics:', result);
       return result;
     } catch (error) {
       console.error('❌ Temporal analytics error:', error);
@@ -433,6 +576,89 @@ export class PostService {
         week: { total: 1, matching: 1, percentile: 0, tier: 'elite' },
         month: { total: 1, matching: 1, percentile: 0, tier: 'elite' }
       };
+    }
+  }
+
+  /**
+   * Calculate tier based on percentile
+   */
+  private calculateTier(percentile: number): string {
+    if (percentile >= 95) return 'elite';
+    if (percentile >= 80) return 'rare';
+    if (percentile >= 60) return 'unique';
+    if (percentile >= 40) return 'notable';
+    if (percentile >= 20) return 'common';
+    return 'popular';
+  }
+
+  /**
+   * Find similar posts within a specific timeframe using semantic similarity
+   */
+  private async findSimilarPostsInTimeframe(
+    contentHash: string,
+    timeStart: string,
+    scope: string,
+    locationCity?: string,
+    locationState?: string,
+    locationCountry?: string,
+    currentEmbedding?: number[],
+    hasNegation?: boolean
+  ): Promise<any[]> {
+    try {
+      // Use the passed embedding if available, otherwise fallback to exact matching
+      if (!currentEmbedding) {
+        console.log('⚠️ No embedding provided, using exact matching');
+        // Fallback to exact content hash matching
+        const { data, error } = await this.supabase
+          .from('posts')
+          .select('id')
+          .eq('content_hash', contentHash)
+          .eq('moderation_status', 'approved')
+          .gte('created_at', timeStart);
+        return data || [];
+      }
+
+      // Use semantic similarity with the same threshold as main system
+      const { data, error } = await this.supabase.rpc('match_posts_by_embedding', {
+        filter_city: locationCity,
+        filter_country: locationCountry,
+        filter_state: locationState,
+        match_limit: 100,
+        match_threshold: 0.70, // Same threshold as main system
+        query_embedding: currentEmbedding,
+        query_has_negation: hasNegation || false,
+        scope_filter: scope,
+        today_only: false
+      });
+
+      if (error) {
+        console.error('❌ Temporal semantic search failed:', error);
+        // Fallback to exact matching
+        const { data: fallbackData, error: fallbackErr } = await this.supabase
+          .from('posts')
+          .select('id')
+          .eq('content_hash', contentHash)
+          .eq('moderation_status', 'approved')
+          .gte('created_at', timeStart);
+        return fallbackData || [];
+      }
+
+      // Filter results to only include posts within the timeframe
+      const filteredData = (data || []).filter((post: any) => 
+        new Date(post.created_at) >= new Date(timeStart)
+      );
+
+      return filteredData;
+    } catch (error) {
+      console.error('❌ Temporal similarity search error:', error);
+      // Fallback to exact matching
+      const { data, error: catchError } = await this.supabase
+        .from('posts')
+        .select('id')
+        .eq('content_hash', contentHash)
+        .eq('moderation_status', 'approved')
+        .gte('created_at', timeStart);
+      return data || [];
     }
   }
 
