@@ -1,0 +1,12 @@
+{
+  "imports": {
+    "supabase": "npm:@supabase/supabase-js@2",
+    "openai": "npm:openai@4.0.0",
+    "crypto": "npm:crypto-js@4.2.0"
+  },
+  "compilerOptions": {
+    "allowJs": true,
+    "lib": ["deno.window"],
+    "strict": false
+  }
+}
