@@ -237,12 +237,25 @@ export class PostService {
       if (percentileResult.tier === 'elite' && matchCount === 1) {
         // Skip expensive temporal calculations for truly unique posts
         console.log('⏰ Skipping temporal analytics for elite unique post (performance optimization)');
+        // Generate varied messages for elite posts
+        const generateEliteMessage = (timeframe: string) => {
+          const messages = {
+            today: ["First today!", "Today's pioneer", "Leading today"],
+            week: ["First this week!", "Week's pioneer", "Leading the week"],
+            month: ["First this month!", "Month's trailblazer", "Monthly first"],
+            year: ["First this year!", "Year's innovator", "Annual pioneer"],
+            allTime: ["First ever!", "Trailblazer", "Pioneer"]
+          };
+          const options = messages[timeframe as keyof typeof messages] || ["First!"];
+          return options[Math.floor(Math.random() * options.length)];
+        };
+
         temporalAnalytics = {
-          today: { total: 1, matching: 1, percentile: 0, tier: 'elite', comparison: 'Only you!' },
-          week: { total: 1, matching: 1, percentile: 0, tier: 'elite', comparison: 'Only you!' },
-          month: { total: 1, matching: 1, percentile: 0, tier: 'elite', comparison: 'Only you!' },
-          year: { total: 1, matching: 1, percentile: 0, tier: 'elite', comparison: 'Only you!' },
-          allTime: { total: 1, matching: 1, percentile: 0, tier: 'elite', comparison: 'Only you!' }
+          today: { total: 1, matching: 1, percentile: 0, tier: 'elite', comparison: generateEliteMessage('today') },
+          week: { total: 1, matching: 1, percentile: 0, tier: 'elite', comparison: generateEliteMessage('week') },
+          month: { total: 1, matching: 1, percentile: 0, tier: 'elite', comparison: generateEliteMessage('month') },
+          year: { total: 1, matching: 1, percentile: 0, tier: 'elite', comparison: generateEliteMessage('year') },
+          allTime: { total: 1, matching: 1, percentile: 0, tier: 'elite', comparison: generateEliteMessage('allTime') }
         };
       } else {
         console.log('⏰ Calculating temporal analytics...');
@@ -629,41 +642,58 @@ export class PostService {
       const monthPercentile = monthTotal > 0 ? (monthMatching / monthTotal) * 100 : 0;
       const monthTier = this.calculateTier(monthPercentile);
 
+      // Generate varied temporal messages for first-time posts
+      const generateTemporalMessage = (timeframe: string, matchCount: number) => {
+        if (matchCount <= 1) {
+          const messages = {
+            today: ["First today!", "Today's pioneer", "Leading today"],
+            week: ["First this week!", "Week's pioneer", "Leading the week"],
+            month: ["First this month!", "Month's trailblazer", "Monthly first"],
+            year: ["First this year!", "Year's innovator", "Annual pioneer"],
+            allTime: ["First ever!", "Trailblazer", "Pioneer"]
+          };
+          const options = messages[timeframe as keyof typeof messages] || ["First!"];
+          return options[Math.floor(Math.random() * options.length)];
+        } else {
+          return `${matchCount} of ${matchCount}`;
+        }
+      };
+
       const result = {
         today: {
           total: todayTotal,
           matching: todayMatching,
           percentile: Math.round(todayPercentile * 100) / 100,
           tier: todayTier,
-          comparison: todayMatching <= 1 ? 'Only you!' : `${todayMatching} of ${todayTotal}`
+          comparison: todayMatching <= 1 ? generateTemporalMessage('today', todayMatching) : `${todayMatching} of ${todayTotal}`
         },
         week: {
           total: weekTotal,
           matching: weekMatching,
           percentile: Math.round(weekPercentile * 100) / 100,
           tier: weekTier,
-          comparison: weekMatching <= 1 ? 'Only you!' : `${weekMatching} of ${weekTotal}`
+          comparison: weekMatching <= 1 ? generateTemporalMessage('week', weekMatching) : `${weekMatching} of ${weekTotal}`
         },
         month: {
           total: monthTotal,
           matching: monthMatching,
           percentile: Math.round(monthPercentile * 100) / 100,
           tier: monthTier,
-          comparison: monthMatching <= 1 ? 'Only you!' : `${monthMatching} of ${monthTotal}`
+          comparison: monthMatching <= 1 ? generateTemporalMessage('month', monthMatching) : `${monthMatching} of ${monthTotal}`
         },
         year: {
           total: monthTotal, // Use month data for year (since we don't have year data yet)
           matching: monthMatching,
           percentile: Math.round(monthPercentile * 100) / 100,
           tier: monthTier,
-          comparison: monthMatching <= 1 ? 'Only you!' : `${monthMatching} of ${monthTotal}`
+          comparison: monthMatching <= 1 ? generateTemporalMessage('year', monthMatching) : `${monthMatching} of ${monthTotal}`
         },
         allTime: {
           total: monthTotal, // Use month data for allTime (since we don't have allTime data yet)
           matching: monthMatching,
           percentile: Math.round(monthPercentile * 100) / 100,
           tier: monthTier,
-          comparison: monthMatching <= 1 ? 'Only you!' : `${monthMatching} of ${monthTotal}`
+          comparison: monthMatching <= 1 ? generateTemporalMessage('allTime', monthMatching) : `${monthMatching} of ${monthTotal}`
         }
       };
 

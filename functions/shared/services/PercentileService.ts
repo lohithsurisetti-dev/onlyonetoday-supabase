@@ -33,13 +33,23 @@ export class PercentileService {
     
     // CRITICAL: If you're the only person who did this, it's always ELITE regardless of dataset size
     if (peopleWhoDidThis === 1) {
+      // Generate varied main comparison messages for first-time posts
+      const firstTimeMessages = [
+        "You're the first to share this!",
+        "You're a trailblazer!",
+        "You're the pioneer!",
+        "You're leading the way!",
+        "You're the innovator!"
+      ];
+      const randomMessage = firstTimeMessages[Math.floor(Math.random() * firstTimeMessages.length)];
+
       return {
         percentile,
         tier: 'elite',
         displayText: 'Only you!',
         badge: '🏆',
-        message: "You're the first to share this! 🌟",
-        comparison: `Only you out of ${totalPostsInScope.toLocaleString()} people`
+        message: `${randomMessage} 🌟`,
+        comparison: `${randomMessage} out of ${totalPostsInScope.toLocaleString()} people`
       };
     }
     
