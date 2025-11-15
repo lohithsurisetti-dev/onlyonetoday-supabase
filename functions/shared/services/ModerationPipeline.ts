@@ -284,6 +284,24 @@ export class ModerationPipeline {
     contentType: string, 
     additionalContext?: any
   ): Promise<ModerationResult> {
+    // Check for contact information (phone, email)
+    const contactCheck = this.checkContactInfo(content);
+    if (!contactCheck.approved) {
+      return contactCheck;
+    }
+
+    // Check for URLs and links
+    const urlCheck = this.checkURLs(content);
+    if (!urlCheck.approved) {
+      return urlCheck;
+    }
+
+    // Check for social media handles
+    const socialCheck = this.checkSocialMedia(content);
+    if (!socialCheck.approved) {
+      return socialCheck;
+    }
+
     // Check for excessive repetition
     if (this.hasExcessiveRepetition(content)) {
       return {
@@ -406,13 +424,47 @@ export class ModerationPipeline {
    */
   private async checkAdultContent(content: string): Promise<ModerationResult> {
     try {
-      // Use Hugging Face API for adult content detection
+      // ALWAYS check static keywords first (fast, reliable)
+      const sexualTerms = [
+        'sex', 'sexual', 'intercourse', 'fuck', 'fucking', 'fkd', 'porn', 'pornography',
+        'masturbat', 'orgasm', 'penis', 'vagina', 'breast', 'nude', 'naked',
+        'strip', 'strip tease', 'prostitute', 'hooker', 'escort', 'brothel',
+        'doggy style', 'doggy', 'missionary', 'anal', 'oral', 'blowjob', 'bj',
+        'handjob', 'hj', 'fingering', 'climax', 'ejaculat', 'cum', 'sperm',
+        'erotic', 'seduce', 'seduction', 'foreplay', 'intimate', 'intimacy',
+        'make love', 'lovemaking', 'bedroom', 'bed time', 'sleep together',
+        'explicit', 'nsfw', 'xxx', 'adult content', 'adult material'
+      ];
+
+      const contentLower = content.toLowerCase();
+      let explicitTermCount = 0;
+      
+      for (const term of sexualTerms) {
+        if (contentLower.includes(term)) {
+          explicitTermCount++;
+          console.log(`🚫 Found explicit term: "${term}"`);
+        }
+      }
+
+      // If explicit terms found, block immediately (no need for API)
+      if (explicitTermCount >= 1) {
+        console.log(`🚫 Adult content detected via static keywords: ${explicitTermCount} terms found`);
+        return {
+          approved: false,
+          reason: 'Content rejected: adult content',
+          userMessage: this.generateUserMessage(['adult_content'], 'Content rejected: adult content'),
+          confidence: 0.9,
+          flags: ['adult_content']
+        };
+      }
+
+      // Use Hugging Face API for adult content detection (for subtle cases)
       const hfToken = Deno.env.get('HUGGINGFACE_API_KEY');
       if (!hfToken) {
-        console.log('⚠️ No Hugging Face API key, skipping adult content check');
+        console.log('⚠️ No Hugging Face API key, static check passed');
         return {
           approved: true,
-          confidence: 0.5,
+          confidence: 0.8,
           flags: []
         };
       }
@@ -421,7 +473,8 @@ export class ModerationPipeline {
       const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout for CPU limits
 
       // Use the reliable toxic-bert model with improved detection logic
-      const response = await fetch('https://api-inference.huggingface.co/models/unitary/toxic-bert', {
+      // New HuggingFace endpoint: router.huggingface.co/hf-inference
+      const response = await fetch('https://router.huggingface.co/hf-inference/models/unitary/toxic-bert', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${hfToken}`,
@@ -438,61 +491,71 @@ export class ModerationPipeline {
 
       clearTimeout(timeoutId);
 
+      let results: any = null;
       if (!response.ok) {
         console.log('⚠️ Adult content API failed, using static fallback');
         // Fallback to static keyword detection when API fails
-        const contentLower = content.toLowerCase();
-        const sexualTerms = ['sex', 'sexual', 'fuck', 'porn', 'masturbat', 'orgasm', 'penis', 'vagina', 'nude', 'naked', 'doggy style', 'oral', 'anal'];
-        const hasExplicitTerms = sexualTerms.some(term => contentLower.includes(term));
-        
-        if (hasExplicitTerms) {
-          return {
-            approved: false,
-            reason: 'Content rejected: adult content (fallback detection)',
-            userMessage: this.generateUserMessage(['adult_content'], 'Content rejected: adult content'),
-            confidence: 0.8,
-            flags: ['adult_content']
-          };
+        // Skip API result parsing and go straight to static keyword check
+      } else {
+        try {
+          results = await response.json();
+          console.log('🔍 Adult content detection results:', results);
+        } catch (parseError) {
+          console.log('⚠️ Failed to parse API response, using static fallback');
+          results = null;
         }
-        
-        return {
-          approved: true,
-          confidence: 0.5,
-          flags: ['api_fallback']
-        };
       }
-
-      const results = await response.json();
-      console.log('🔍 Adult content detection results:', results);
 
       // Check for adult/sexual content indicators with more sensitive detection
       let adultScore = 0;
       let isAdult = false;
       let hasObsceneContent = false;
 
-      if (Array.isArray(results) && results.length > 0) {
-        for (const result of results) {
-          if (result.label && result.score) {
+      // Handle nested array format from new HuggingFace endpoint: [[{label, score}, ...]]
+      let resultsArray: any[] = [];
+      if (results && Array.isArray(results)) {
+        // Check if it's nested array format
+        if (results.length > 0 && Array.isArray(results[0])) {
+          resultsArray = results[0];
+        } else {
+          resultsArray = results;
+        }
+      }
+
+      if (resultsArray.length > 0) {
+        for (const result of resultsArray) {
+          if (result.label && typeof result.score === 'number') {
             // Look for sexual/adult content labels
             const label = result.label.toLowerCase();
+            const score = result.score;
+            
             if (label.includes('sexual') || label.includes('adult') || 
                 label.includes('explicit') || label.includes('nsfw') ||
                 label.includes('obscene') || label.includes('harassment') ||
                 label.includes('toxic') || label.includes('threat') ||
                 label.includes('insult') || label.includes('identity_hate')) {
-              adultScore += result.score;
+              adultScore += score;
               
               // Be more sensitive to obscene content
-              if (label.includes('obscene') && result.score > 0.0001) {
+              if (label.includes('obscene') && score > 0.01) {
                 hasObsceneContent = true;
               }
               
-              if (result.score > 0.3) { // Lower threshold for better detection
+              // Threshold for blocking: toxic > 0.3, obscene > 0.02, threat > 0.1
+              if (label.includes('toxic') && score > 0.3) {
                 isAdult = true;
               }
               
-              // Be more sensitive to toxic and threat content
-              if ((label.includes('toxic') || label.includes('threat')) && result.score > 0.3) {
+              if (label.includes('obscene') && score > 0.02) {
+                isAdult = true;
+              }
+              
+              if (label.includes('threat') && score > 0.1) {
+                isAdult = true;
+              }
+              
+              // High insult or identity_hate scores
+              if ((label.includes('insult') || label.includes('identity_hate')) && score > 0.2) {
                 isAdult = true;
               }
             }
@@ -500,33 +563,15 @@ export class ModerationPipeline {
         }
       }
 
-      // Also check for explicit sexual terms using a more comprehensive approach
-      const sexualTerms = [
-        'sex', 'sexual', 'intercourse', 'fuck', 'fucking', 'fkd', 'porn', 'pornography',
-        'masturbat', 'orgasm', 'penis', 'vagina', 'breast', 'nude', 'naked',
-        'strip', 'strip tease', 'prostitute', 'hooker', 'escort', 'brothel',
-        'doggy style', 'doggy', 'missionary', 'anal', 'oral', 'blowjob', 'bj',
-        'handjob', 'hj', 'fingering', 'climax', 'ejaculat', 'cum', 'sperm',
-        'erotic', 'seduce', 'seduction', 'foreplay', 'intimate', 'intimacy',
-        'make love', 'lovemaking', 'bedroom', 'bed time', 'sleep together'
-      ];
-
-      const contentLower = content.toLowerCase();
-      let explicitTermCount = 0;
-      
-      for (const term of sexualTerms) {
-        if (contentLower.includes(term)) {
-          explicitTermCount++;
-        }
-      }
-
-      // Prioritize AI detection, use static terms as backup
-      if (isAdult || hasObsceneContent || adultScore > 0.2 || explicitTermCount >= 1) {
+      // AI detection results are already processed above
+      // If we get here, static keywords passed and AI didn't flag it
+      if (isAdult || hasObsceneContent || adultScore > 0.2) {
+        console.log(`🚫 Adult content detected via AI: isAdult=${isAdult}, hasObscene=${hasObsceneContent}, score=${adultScore}`);
         return {
           approved: false,
           reason: 'Content rejected: adult content',
           userMessage: this.generateUserMessage(['adult_content'], 'Content rejected: adult content'),
-          confidence: Math.max(adultScore, explicitTermCount * 0.4),
+          confidence: adultScore,
           flags: ['adult_content']
         };
       }
@@ -644,6 +689,129 @@ export class ModerationPipeline {
     }
 
     return false;
+  }
+
+  /**
+   * Check for contact information (phone numbers, email addresses)
+   */
+  private checkContactInfo(content: string): ModerationResult {
+    // Phone number patterns (more robust, without strict word boundaries)
+    const phonePatterns = [
+      /\d{3}[-.\s]?\d{3}[-.\s]?\d{4}/,                    // 123-456-7890, 123.456.7890, 123 456 7890, 1234567890
+      /\(\d{3}\)\s?\d{3}[-.\s]?\d{4}/,                     // (123) 456-7890, (123)456-7890
+      /\+\d{1,3}[-.\s]?\d{3}[-.\s]?\d{3}[-.\s]?\d{4}/,    // +1-123-456-7890, +1.123.456.7890
+      /\b\d{10}\b/,                                        // 10 consecutive digits (with word boundaries)
+    ];
+
+    // Email pattern (more robust, without strict word boundaries)
+    const emailPattern = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}/i;
+
+    // Check for phone numbers
+    for (const pattern of phonePatterns) {
+      if (pattern.test(content)) {
+        return {
+          approved: false,
+          reason: 'Contact information not allowed',
+          userMessage: this.generateUserMessage(['contact_info'], 'Contact information not allowed'),
+          confidence: 0.95,
+          flags: ['contact_info']
+        };
+      }
+    }
+
+    // Check for email addresses
+    if (emailPattern.test(content)) {
+      return {
+        approved: false,
+        reason: 'Contact information not allowed',
+        userMessage: this.generateUserMessage(['contact_info'], 'Contact information not allowed'),
+        confidence: 0.95,
+        flags: ['contact_info']
+      };
+    }
+
+    return {
+      approved: true,
+      confidence: 0.9,
+      flags: []
+    };
+  }
+
+  /**
+   * Check for URLs and links
+   */
+  private checkURLs(content: string): ModerationResult {
+    // Common TLDs
+    const commonTlds = 'com|net|org|io|co|me|app|dev|tv|cc|xyz|info|biz|us|uk|ca|au|in|jp|cn|ru|de|fr|es|it|nl|se|no|dk|fi|pl|cz|hu|ro|gr|pt|ie|be|at|ch|tr|kr|tw|hk|sg|my|th|ph|id|vn|nz|za|mx|br|ar|cl|co|pe|ve|ec|uy|py|bo|cr|pa|do|gt|hn|ni|sv|bz|jm|tt|bb|gd|lc|vc|ag|dm|kn|bs|aw|ky|vg|ai|ms|tc|fk|gs|sh|ac|io|pn|hm|tf|aq|bv|sj|um|as|gu|mp|pr|vi|pw|fm|mh|nr|ki|tv|to|ws|fj|nc|pf|vu|sb|pg|ck|nu|tk|cx|nf';
+    
+    const urlPatterns = [
+      /https?:\/\/[^\s]+/i,                               // http:// or https://
+      /www\.[^\s]+/i,                                     // www.example.com
+      new RegExp(`[a-z0-9-]+\\.(${commonTlds})(?:[^\\s]*)?`, 'i'), // domain.com, domain.net, etc. (without word boundary)
+    ];
+
+    for (const pattern of urlPatterns) {
+      if (pattern.test(content)) {
+        return {
+          approved: false,
+          reason: 'URLs and links not allowed',
+          userMessage: this.generateUserMessage(['urls'], 'URLs and links not allowed'),
+          confidence: 0.95,
+          flags: ['urls']
+        };
+      }
+    }
+
+    return {
+      approved: true,
+      confidence: 0.9,
+      flags: []
+    };
+  }
+
+  /**
+   * Check for social media handles and promotion
+   */
+  private checkSocialMedia(content: string): ModerationResult {
+    // @username patterns
+    const handlePattern = /@\w+/;
+
+    // Platform names (only when used for promotion)
+    const platformPatterns = [
+      /\b(follow|add|dm|message|contact)\s+(me\s+)?(on\s+)?(instagram|twitter|facebook|tiktok|snapchat|linkedin|youtube|pinterest|reddit|discord|telegram|whatsapp|signal)\b/i,
+      /\b(instagram|twitter|facebook|tiktok|snapchat|linkedin|youtube|pinterest|reddit|discord|telegram|whatsapp|signal)\s+(handle|account|profile|page|channel)\b/i,
+      /\b(find|check|see)\s+(me|my|my\s+profile)\s+(on|at)\s+(instagram|twitter|facebook|tiktok|snapchat|linkedin|youtube|pinterest|reddit|discord|telegram|whatsapp|signal)\b/i,
+    ];
+
+    // Check for @username handles
+    if (handlePattern.test(content)) {
+      return {
+        approved: false,
+        reason: 'Social media handles not allowed',
+        userMessage: this.generateUserMessage(['social_media'], 'Social media handles not allowed'),
+        confidence: 0.9,
+        flags: ['social_media']
+      };
+    }
+
+    // Check for platform promotion patterns
+    for (const pattern of platformPatterns) {
+      if (pattern.test(content)) {
+        return {
+          approved: false,
+          reason: 'Social media promotion not allowed',
+          userMessage: this.generateUserMessage(['social_media'], 'Social media promotion not allowed'),
+          confidence: 0.9,
+          flags: ['social_media']
+        };
+      }
+    }
+
+    return {
+      approved: true,
+      confidence: 0.9,
+      flags: []
+    };
   }
 
   /**
@@ -781,6 +949,36 @@ export class ModerationPipeline {
         "That's not quite right. Try again?",
         "We're confused! Help us understand.",
         "Lost in translation! Try a different approach."
+      ],
+      'contact_info': [
+        "For your safety, please don't share contact info.",
+        "Keep it anonymous! No phone numbers or emails.",
+        "Privacy first! Let's keep contact info private.",
+        "Safety check! No personal contact details allowed.",
+        "Stay anonymous! No phone or email sharing.",
+        "Privacy matters! Keep contact info to yourself.",
+        "Safety first! No contact information please.",
+        "Anonymous mode! No phone numbers or emails."
+      ],
+      'urls': [
+        "No links allowed! Keep it text-only.",
+        "Links are a no-go here. Try again without URLs.",
+        "This isn't a link-sharing app. Keep it simple.",
+        "No URLs please! Just share your story.",
+        "Links blocked! Share your experience, not links.",
+        "No external links allowed. Keep it original.",
+        "Link-free zone! Share your moment, not URLs.",
+        "No links here! Just your story, please."
+      ],
+      'social_media': [
+        "Keep it anonymous! No social media handles.",
+        "This isn't Instagram! No @handles please.",
+        "Anonymous zone! No social media promotion.",
+        "Stay off social! No handles or platform names.",
+        "Privacy first! No social media handles.",
+        "Anonymous mode! No @usernames or platform names.",
+        "Keep it private! No social media handles.",
+        "No social media! This is an anonymous space."
       ]
     };
 

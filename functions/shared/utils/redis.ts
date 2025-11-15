@@ -152,6 +152,9 @@ export const CacheKeys = {
   // Total posts count
   totalPostsCount: (scope: string, city?: string, state?: string, country?: string) => 
     `count:${scope}:${city || 'any'}:${state || 'any'}:${country || 'any'}`,
+  
+  // Individual post cache
+  post: (postId: string) => `post:${postId}`,
 } as const;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

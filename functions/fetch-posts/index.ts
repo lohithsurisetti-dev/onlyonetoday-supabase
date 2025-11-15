@@ -1,6 +1,8 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { cacheGet, cacheSet, CacheKeys, CacheTTL } from '../shared/utils/redis.ts';
+import { KeywordMatcher } from '../shared/services/KeywordMatcher.ts';
+import { StoryGenerator } from '../shared/services/StoryGenerator.ts';
 
 interface FetchPostsRequest {
   page?: number;
@@ -44,6 +46,8 @@ serve(async (req) => {
       .select(`
         id,
         content,
+        normalized_content,
+        keywords,
         input_type,
         scope,
         location_city,
@@ -55,6 +59,10 @@ serve(async (req) => {
         tier,
         percentile,
         match_count,
+        emotional_tone,
+        narrative,
+        celebration,
+        badge,
         embedding,
         has_negation
       `)
@@ -159,104 +167,83 @@ serve(async (req) => {
       ]) || []
     );
 
-    // Calculate real-time percentile/tier for each post
-    console.log('📊 Calculating real-time percentile/tier for posts...');
+    // V2: Calculate real-time match count and story for each post using keyword matching
+    console.log('📊 V2: Calculating real-time match count and story for posts...');
+    const keywordMatcher = new KeywordMatcher(supabaseClient);
+    const storyGenerator = new StoryGenerator();
+    
     const postsWithRealTimeData = await Promise.all(
       posts?.map(async (post: any) => {
         try {
-          // Get current match count using semantic similarity
-          const { data: similarPosts, error: searchError } = await supabaseClient.rpc('match_posts_by_embedding', {
-            filter_city: post.location_city,
-            filter_country: post.location_country,
-            filter_state: post.location_state,
-            match_limit: 100,
-            match_threshold: 0.70,
-            query_embedding: post.embedding,
-            query_has_negation: post.has_negation || false,
-            scope_filter: post.scope,
-            today_only: false
-          });
-
-          if (searchError || !similarPosts) {
-            console.log('⚠️ Using stored values for post:', post.id);
-            return post;
+          // Use stored keywords if available, otherwise extract from content
+          const keywords = post.keywords || [];
+          
+          if (keywords.length === 0) {
+            // Fallback: use stored values if no keywords
+            console.log('⚠️ No keywords for post, using stored values:', post.id);
+            return {
+              ...post,
+              matchCount: post.match_count || 1,
+              totalInScope: post.total_in_scope || 1,
+              emotionalTone: post.emotional_tone || 'unique',
+              narrative: post.narrative || "You're blazing a trail. No one else did this today. Your moment is uniquely yours. 🌟",
+              celebration: post.celebration || 'trailblazer',
+              badge: post.badge || '🌟'
+            };
           }
 
-          const currentMatchCount = similarPosts.length + 1; // +1 for current post
+          // Find similar posts using keyword matching
+          const similar = await keywordMatcher.findSimilarPosts(
+            keywords,
+            post.scope,
+            {
+              city: post.location_city,
+              state: post.location_state,
+              country: post.location_country
+            },
+            post.input_type || 'action'
+          );
 
-          // Get total posts in scope
-          let totalQuery = supabaseClient
-            .from('posts')
-            .select('id', { count: 'exact' })
-            .eq('moderation_status', 'approved');
-
-          // Apply scope filtering based on hierarchy
-          // City posts only match city posts, state posts match city+state, etc.
-          switch (post.scope) {
-            case 'city':
-              if (post.location_city) {
-                // City scope: count only city posts in this city
-                totalQuery = totalQuery.eq('location_city', post.location_city).eq('scope', 'city');
-              }
-              break;
-            case 'state':
-              if (post.location_state) {
-                // State scope: count city + state posts in this state
-                totalQuery = totalQuery.eq('location_state', post.location_state).in('scope', ['city', 'state']);
-              }
-              break;
-            case 'country':
-              if (post.location_country) {
-                // Country scope: count city + state + country posts in this country
-                totalQuery = totalQuery.eq('location_country', post.location_country).in('scope', ['city', 'state', 'country']);
-              }
-              break;
-            case 'world':
-            default:
-              // World scope: count all posts globally
-              break;
-          }
-
-          const { count: totalPosts } = await totalQuery;
-          const totalPostsInScope = Math.max(1, totalPosts || 1);
-
-          // Calculate current percentile
-          const currentPercentile = (currentMatchCount / totalPostsInScope) * 100;
-
-          // Determine current tier
-          let currentTier = 'common';
-          if (currentPercentile < 0.5) currentTier = 'elite';
-          else if (currentPercentile < 5) currentTier = 'rare';
-          else if (currentPercentile < 15) currentTier = 'unique';
-          else if (currentPercentile < 30) currentTier = 'notable';
-          else if (currentPercentile < 50) currentTier = 'common';
-          else currentTier = 'popular';
-
-          // Generate display text
-          let displayText = '';
-          if (currentMatchCount === 1) {
-            displayText = 'Only you!';
-          } else {
-            displayText = `Top ${Math.round(currentPercentile)}%`;
-          }
+          // Generate story with V2 approach
+          const story = storyGenerator.generateStory(
+            similar.matchCount,
+            similar.totalInScope,
+            post.content,
+            post.input_type || 'action'
+          );
 
           return {
             ...post,
-            tier: currentTier,
-            percentile: Math.round(currentPercentile * 100) / 100,
-            matchCount: currentMatchCount,
-            displayText,
-            comparison: `${currentMatchCount} of ${totalPostsInScope} people`
+            matchCount: similar.matchCount,
+            totalInScope: similar.totalInScope,
+            emotionalTone: story.emotionalTone,
+            narrative: story.narrative,
+            celebration: story.celebration,
+            badge: story.badge,
+            // Legacy fields for backward compatibility
+            tier: post.tier || 'unique',
+            percentile: post.percentile || 0,
+            displayText: `${similar.matchCount} of ${similar.totalInScope}`,
+            comparison: `${similar.matchCount} of ${similar.totalInScope} people`
           };
 
         } catch (error) {
-          console.error('❌ Real-time calculation error for post:', post.id, error);
-          return post; // Return original post if calculation fails
+          console.error('❌ V2 calculation error for post:', post.id, error);
+          // Return with stored values as fallback
+          return {
+            ...post,
+            matchCount: post.match_count || 1,
+            totalInScope: post.total_in_scope || 1,
+            emotionalTone: post.emotional_tone || 'unique',
+            narrative: post.narrative || "You're blazing a trail. No one else did this today. Your moment is uniquely yours. 🌟",
+            celebration: post.celebration || 'trailblazer',
+            badge: post.badge || '🌟'
+          };
         }
       }) || []
     );
 
-    // Format response
+    // Format response with V2 fields
     const formattedPosts = postsWithRealTimeData.map(post => {
       const profile = post.user_id ? profileMap.get(post.user_id) : null;
       const reactions = reactionMap.get(post.id) || { funny: 0, creative: 0, must_try: 0 };
@@ -272,12 +259,19 @@ serve(async (req) => {
         user_id: post.user_id,
         is_anonymous: post.is_anonymous,
         created_at: post.created_at,
-        tier: post.tier,
-        percentile: post.percentile,
-        matchCount: post.matchCount,
-        displayText: post.displayText || `Top ${Math.round(post.percentile)}%`,
-        comparison: post.comparison || `${post.matchCount} people`,
-        username: profile?.username,
+        // V2 fields
+        matchCount: post.matchCount || post.match_count || 1,
+        totalInScope: post.totalInScope || post.total_in_scope || 1,
+        emotionalTone: post.emotionalTone || post.emotional_tone || 'unique',
+        narrative: post.narrative || "You're blazing a trail. No one else did this today. Your moment is uniquely yours. 🌟",
+        celebration: post.celebration || 'trailblazer',
+        badge: post.badge || '🌟',
+        // Legacy fields (for backward compatibility)
+        tier: post.tier || 'unique',
+        percentile: post.percentile || 0,
+        displayText: post.displayText || `${post.matchCount || 1} of ${post.totalInScope || 1}`,
+        comparison: post.comparison || `${post.matchCount || 1} of ${post.totalInScope || 1} people`,
+        username: post.is_anonymous ? 'anonymous' : (profile?.username || 'anonymous'),
         avatar_url: profile?.avatar_url,
         reactions
       };

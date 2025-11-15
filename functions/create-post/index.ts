@@ -1,6 +1,6 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import { PostService } from '../shared/services/PostService.ts';
+import { PostServiceV2 } from '../shared/services/PostServiceV2.ts';
 import { cacheDel, CacheKeys } from '../shared/utils/redis.ts';
 
 interface CreatePostRequest {
@@ -11,10 +11,23 @@ interface CreatePostRequest {
   locationCity?: string;
   locationState?: string;
   locationCountry?: string;
+  userId?: string | null; // Now supports authenticated users
+  dayOfWeek?: 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
 }
 
 serve(async (req) => {
   try {
+    // CORS handling
+    if (req.method === 'OPTIONS') {
+      return new Response(null, {
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        },
+      });
+    }
+
     // Initialize Supabase client with service role key for admin operations
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -22,7 +35,17 @@ serve(async (req) => {
 
     // Parse request body
     const body: CreatePostRequest = await req.json();
-    const { content, inputType, isAnonymous, scope, locationCity, locationState, locationCountry } = body;
+    const { 
+      content, 
+      inputType, 
+      isAnonymous, 
+      scope, 
+      locationCity, 
+      locationState, 
+      locationCountry,
+      userId,
+      dayOfWeek
+    } = body;
 
     // Validate required fields
     if (!content || !inputType || !scope) {
@@ -33,45 +56,18 @@ serve(async (req) => {
         }),
         { 
           status: 400, 
-          headers: { 'Content-Type': 'application/json' } 
+          headers: { 
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+          } 
         }
       );
     }
 
-    // Input validation
-    if (content.trim().length < 3) {
-      return new Response(
-        JSON.stringify({ 
-          success: false, 
-          error: 'Content must be at least 3 characters long' 
-        }),
-        { 
-          status: 400, 
-          headers: { 'Content-Type': 'application/json' } 
-        }
-      );
-    }
+    // Initialize V2 post service
+    const postService = new PostServiceV2(supabase);
 
-    if (content.length > 2000) {
-      return new Response(
-        JSON.stringify({ 
-          success: false, 
-          error: 'Content too long (max 2000 characters)' 
-        }),
-        { 
-          status: 400, 
-          headers: { 'Content-Type': 'application/json' } 
-        }
-      );
-    }
-
-    // For now, use null for anonymous posts (replace with real auth later)
-    const userId = null;
-
-    // Initialize post service with all advanced features
-    const postService = new PostService();
-
-    // Create post with all advanced features
+    // Create post with V2 approach (keyword-based, narrative stories, multilingual)
     const result = await postService.createPost({
       content: content.trim(),
       inputType,
@@ -80,7 +76,8 @@ serve(async (req) => {
       locationCity,
       locationState,
       locationCountry,
-      userId
+      userId: userId || null,
+      dayOfWeek: dayOfWeek
     });
 
     if (!result.success) {
@@ -91,53 +88,41 @@ serve(async (req) => {
         }),
         { 
           status: 200, 
-          headers: { 'Content-Type': 'application/json' } 
+          headers: { 
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+          } 
         }
       );
     }
 
-    console.log('✅ Post created successfully with all advanced features!');
+    console.log('✅ Post created successfully with V2 approach!');
 
     // Invalidate relevant caches after successful post creation
-    if (result.success) {
+    if (result.success && result.post) {
       console.log('🗑️ Invalidating caches after post creation...');
       
-      // Invalidate similar posts cache for this content
-      if (result.post?.content) {
-        const contentHash = result.post.content.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ':');
-        const similarCacheKey = `similar:${contentHash}`;
-        console.log(`🗑️ Invalidating similar posts cache: ${similarCacheKey}`);
-        await cacheDel(similarCacheKey);
-        
-        // Invalidate temporal analytics cache
-        const temporalCacheKey = CacheKeys.temporalAnalytics(contentHash, scope);
-        console.log(`🗑️ Invalidating temporal analytics cache: ${temporalCacheKey}`);
-        await cacheDel(temporalCacheKey);
-        
-        // Invalidate total posts count cache for this scope
-        const countCacheKey = CacheKeys.totalPostsCount(scope, locationCity, locationState, locationCountry);
-        console.log(`🗑️ Invalidating total posts count cache: ${countCacheKey}`);
-        await cacheDel(countCacheKey);
-      }
+      // Invalidate post-specific cache
+      await cacheDel(CacheKeys.post(result.post.id));
       
-      // Invalidate feed caches for all scopes and filters
-      const cachePatterns = [
-        `feed:action:${scope}:*`,
-        `feed:day:${scope}:*`,
-        `feed:all:${scope}:*`,
-        `feed:*:${scope}:*`
-      ];
+      // Invalidate total posts count cache for this scope
+      const countCacheKey = CacheKeys.totalPostsCount(scope, locationCity, locationState, locationCountry);
+      console.log(`🗑️ Invalidating total posts count cache: ${countCacheKey}`);
+      await cacheDel(countCacheKey);
       
-      // Note: Redis doesn't support pattern deletion in REST API
-      // In production, you'd use Redis SCAN + DEL or set TTLs appropriately
-      console.log('⚠️ Feed cache invalidation would happen here in production');
+      // Invalidate feed caches (pattern-based deletion not available in REST API)
+      // Cache TTLs will handle expiration
+      console.log('✅ Cache invalidation complete');
     }
 
     return new Response(
       JSON.stringify(result),
       { 
         status: 200, 
-        headers: { 'Content-Type': 'application/json' } 
+        headers: { 
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        } 
       }
     );
 
@@ -146,11 +131,14 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({ 
         success: false, 
-        error: error.message 
+        error: error.message || 'Internal server error'
       }),
       { 
         status: 500, 
-        headers: { 'Content-Type': 'application/json' } 
+        headers: { 
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        } 
       }
     );
   }
