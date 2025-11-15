@@ -28,17 +28,51 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
     const supabaseClient = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Parse query parameters
-    const url = new URL(req.url);
-    const page = parseInt(url.searchParams.get('page') || '1');
-    const limit = Math.min(parseInt(url.searchParams.get('limit') || '10'), 50);
-    const inputType = url.searchParams.get('inputType') || 'all';
-    const scope = url.searchParams.get('scope') || 'world';
-    const tier = url.searchParams.get('tier') || 'all';
-    const reactionFilter = url.searchParams.get('reactionFilter') || 'all';
-    const sortBy = url.searchParams.get('sortBy') || 'newest';
+    // Parse parameters from body (POST) or query params (GET)
+    let page = 1;
+    let limit = 10;
+    let inputType = 'all';
+    let scope = 'world';
+    let tier = 'all';
+    let reactionFilter = 'all';
+    let sortBy = 'newest';
+    let locationCity: string | undefined;
+    let locationState: string | undefined;
+    let locationCountry: string | undefined;
 
-    console.log('📊 Fetch parameters:', { page, limit, inputType, scope, sortBy });
+    if (req.method === 'POST') {
+      // Read from request body
+      try {
+        const body: FetchPostsRequest = await req.json();
+        page = body.page || 1;
+        limit = Math.min(body.limit || 10, 50);
+        inputType = body.inputType || 'all';
+        scope = body.scope || 'world';
+        tier = body.tier || 'all';
+        reactionFilter = body.reactionFilter || 'all';
+        sortBy = body.sortBy || 'newest';
+        locationCity = body.location?.city;
+        locationState = body.location?.state;
+        locationCountry = body.location?.country;
+      } catch (e) {
+        console.warn('⚠️ Could not parse request body, falling back to query params');
+      }
+    }
+
+    // Fall back to query parameters (for GET requests or if body parsing failed)
+    const url = new URL(req.url);
+    page = parseInt(url.searchParams.get('page') || page.toString());
+    limit = Math.min(parseInt(url.searchParams.get('limit') || limit.toString()), 50);
+    inputType = url.searchParams.get('inputType') || inputType;
+    scope = url.searchParams.get('scope') || scope;
+    tier = url.searchParams.get('tier') || tier;
+    reactionFilter = url.searchParams.get('reactionFilter') || reactionFilter;
+    sortBy = url.searchParams.get('sortBy') || sortBy;
+    locationCity = url.searchParams.get('locationCity') || locationCity;
+    locationState = url.searchParams.get('locationState') || locationState;
+    locationCountry = url.searchParams.get('locationCountry') || locationCountry;
+
+    console.log('📊 Fetch parameters:', { page, limit, inputType, scope, sortBy, locationCity, locationState, locationCountry });
 
     // Build query
     let query = supabaseClient

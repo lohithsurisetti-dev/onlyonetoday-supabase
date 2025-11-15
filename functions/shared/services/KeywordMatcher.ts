@@ -3,7 +3,11 @@
  * 
  * Reliable keyword-based matching (no API dependencies)
  * Uses PostgreSQL GIN indexes for fast search
+ * Now includes dynamic stemming + irregular verb matching
  */
+
+import { Stemmer } from './Stemmer.ts';
+import { IrregularVerbs } from './IrregularVerbs.ts';
 
 export interface Location {
   city?: string;
@@ -19,9 +23,13 @@ export interface SimilarPostsResult {
 
 export class KeywordMatcher {
   private supabase: any;
+  private stemmer: Stemmer;
+  private irregularVerbs: IrregularVerbs;
 
   constructor(supabase: any) {
     this.supabase = supabase;
+    this.stemmer = new Stemmer();
+    this.irregularVerbs = new IrregularVerbs();
   }
 
   /**
@@ -147,6 +155,7 @@ export class KeywordMatcher {
 
   /**
    * Extract keywords from content (fallback if keywords not stored)
+   * Now includes stemming and irregular verb normalization
    */
   private extractKeywordsFromContent(content: string): string[] {
     const stopWords = [
@@ -157,27 +166,74 @@ export class KeywordMatcher {
       'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they'
     ];
 
-    return content
+    const words = content
       .toLowerCase()
       .replace(/[^\w\s]/g, ' ')
       .split(/\s+/)
       .filter(w => w.length > 2)
       .filter(w => !stopWords.includes(w))
       .slice(0, 10);
+
+    // Normalize words: stem + irregular verbs
+    const normalized: string[] = [];
+    for (const word of words) {
+      // Check if it's an irregular verb first
+      const irregularForms = this.irregularVerbs.getForms(word);
+      if (irregularForms.length > 0) {
+        // Add root form and all forms for matching
+        normalized.push(this.irregularVerbs.getRoot(word), ...irregularForms);
+      } else {
+        // Stem the word
+        const stemmed = this.stemmer.stem(word);
+        normalized.push(stemmed);
+      }
+    }
+
+    // Remove duplicates and return
+    return [...new Set(normalized)];
   }
 
   /**
    * Calculate keyword overlap between two arrays
+   * Now normalizes keywords (stemming + irregular verbs) before comparing
    */
   private calculateOverlap(keywords1: string[], keywords2: string[]): number {
     if (!keywords1 || !keywords2 || keywords1.length === 0 || keywords2.length === 0) {
       return 0;
     }
 
-    const set1 = new Set(keywords1.map(k => k.toLowerCase()));
-    const set2 = new Set(keywords2.map(k => k.toLowerCase()));
+    // Normalize both keyword arrays
+    const normalized1 = this.normalizeKeywords(keywords1);
+    const normalized2 = this.normalizeKeywords(keywords2);
+
+    const set1 = new Set(normalized1);
+    const set2 = new Set(normalized2);
     
     return [...set1].filter(k => set2.has(k)).length;
+  }
+
+  /**
+   * Normalize keywords: stem + handle irregular verbs
+   */
+  private normalizeKeywords(keywords: string[]): string[] {
+    const normalized: string[] = [];
+    
+    for (const keyword of keywords) {
+      const lower = keyword.toLowerCase();
+      
+      // Check if it's an irregular verb
+      const irregularForms = this.irregularVerbs.getForms(lower);
+      if (irregularForms.length > 0) {
+        // Add root and all forms
+        normalized.push(this.irregularVerbs.getRoot(lower), ...irregularForms);
+      } else {
+        // Stem the word
+        const stemmed = this.stemmer.stem(lower);
+        normalized.push(stemmed);
+      }
+    }
+    
+    return [...new Set(normalized)]; // Remove duplicates
   }
 
   /**

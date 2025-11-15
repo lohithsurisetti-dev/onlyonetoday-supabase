@@ -111,13 +111,19 @@ export class DreamInterpretationService {
     const prompt = this.buildInterpretationPrompt(content, analysis);
     
     try {
-      // Try free APIs first, then fallback to OpenAI
-      const freeResponse = await this.tryFreeAPIs(prompt);
-      if (freeResponse) {
-        return this.parseAIResponse(freeResponse, analysis);
+      // Use OpenAI for better quality, unique interpretations
+      // Free APIs tend to generate generic responses, so we prioritize OpenAI for dream interpretations
+      if (!this.openaiToken) {
+        console.log('⚠️ [Dream Interpretation] OPENAI_API_KEY not found, trying free APIs...');
+        const freeResponse = await this.tryFreeAPIs(prompt);
+        if (freeResponse) {
+          console.log('✅ [Dream Interpretation] Using free API response');
+          return this.parseAIResponse(freeResponse, analysis);
+        }
+        throw new Error('No API keys available');
       }
 
-      // Fallback to OpenAI
+      console.log('💰 [Dream Interpretation] Using OpenAI GPT-3.5-turbo for high-quality, unique interpretations');
       const response = await fetch(`${this.openaiApiUrl}/chat/completions`, {
         method: 'POST',
         headers: {
@@ -129,22 +135,35 @@ export class DreamInterpretationService {
           messages: [
             {
               role: 'system',
-              content: `You are a compassionate dream interpreter who specializes in providing comforting, uplifting guidance. Your responses should:
-1. Always be warm, welcoming, and supportive
-2. For nightmares/negative dreams: focus on healing, growth, and hope
-3. For positive dreams: celebrate and encourage
-4. Provide practical, gentle advice
-5. End with a message of hope and strength
-6. Use a caring, understanding tone
-7. Never be clinical or cold - be like a wise, loving friend`
+              content: `You are a compassionate dream interpreter. Your job is to interpret REAL, SPECIFIC dreams that people actually had.
+
+CRITICAL RULES:
+1. ALWAYS mention the specific people, places, objects, and actions from the dream
+2. If the dream mentions a person's name - use that exact name in your interpretation
+3. If the dream mentions specific actions (like "playing", "hitting", "meeting") - talk about those exact actions
+4. If the dream mentions specific objects (like "jersey", "ball", "car", "house") - reference those objects
+5. Never give generic interpretations - every dream is unique and personal
+6. Use SIMPLE words - write like you're talking to a 12-year-old
+7. Be warm, encouraging, and personal
+8. Reference the actual events, people, and things from the dream in your interpretation
+
+EXAMPLE: If someone dreams "I met John and we played basketball", your interpretation MUST mention:
+- Meeting John (use the actual name)
+- Playing basketball (the specific activity)
+- What these things mean for the dreamer
+
+NEVER use fancy words like "signifies", "symbolizes", "transcendence", "transformation". 
+USE simple words like "means", "shows", "tells you", "is about", "suggests".
+
+Write in short sentences. Be personal. Talk about the SPECIFIC people, places, and things from the actual dream.`
             },
             {
               role: 'user',
               content: prompt
             }
           ],
-          max_tokens: 500,
-          temperature: 0.7
+          max_tokens: 500, // Reduced for faster generation (optimization)
+          temperature: 0.8  // Higher temperature for more creative, unique responses
         }),
       });
 
@@ -155,10 +174,12 @@ export class DreamInterpretationService {
       const result = await response.json();
       const aiResponse = result.choices[0].message.content;
       
+      console.log('✅ [Dream Interpretation] OpenAI API successful');
       return this.parseAIResponse(aiResponse, analysis);
 
     } catch (error) {
-      console.error('❌ AI interpretation failed:', error);
+      console.error('❌ [Dream Interpretation] All APIs failed, using fallback interpretation');
+      console.error(`   Error: ${error.message}`);
       return this.getFallbackInterpretation(content, analysis.dreamType);
     }
   }
@@ -169,34 +190,82 @@ export class DreamInterpretationService {
   private buildInterpretationPrompt(content: string, analysis: DreamAnalysis): string {
     const isNegative = analysis.dreamType === 'negative' || analysis.dreamType === 'nightmare';
     
-    return `Please interpret this dream with a warm, comforting approach:
+    // Extract key nouns and important details from the dream dynamically
+    const extractKeyDetails = (text: string): string[] => {
+      const details: string[] = [];
+      const lower = text.toLowerCase();
+      
+      // Extract people names (capitalized words that appear after "met", "with", "and", etc.)
+      const namePattern = /\b(?:met|with|and|playing|talking|saw|met)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/g;
+      const names = [...text.matchAll(namePattern)].map(m => m[1]);
+      if (names.length > 0) {
+        details.push(`People mentioned: ${names.join(', ')}`);
+      }
+      
+      // Extract key activities/verbs
+      const activities = ['playing', 'hitting', 'meeting', 'getting', 'gave', 'signed', 'dreamt'];
+      const foundActivities = activities.filter(a => lower.includes(a));
+      if (foundActivities.length > 0) {
+        details.push(`Key activities: ${foundActivities.join(', ')}`);
+      }
+      
+      // Extract important objects
+      const objects = ['jersey', 'ball', 'bat', 'field', 'stadium', 'trophy', 'award'];
+      const foundObjects = objects.filter(o => lower.includes(o));
+      if (foundObjects.length > 0) {
+        details.push(`Important objects: ${foundObjects.join(', ')}`);
+      }
+      
+      return details;
+    };
+    
+    const keyDetails = extractKeyDetails(content);
+    const detailsText = keyDetails.length > 0 
+      ? `\nKEY DETAILS FROM THIS DREAM:\n${keyDetails.map(d => `- ${d}`).join('\n')}\n`
+      : '';
+    
+    return `You are interpreting a REAL, SPECIFIC dream that someone actually had. 
 
-DREAM: "${content}"
+THE ACTUAL DREAM THE PERSON WROTE:
+"${content}"
+${detailsText}
+YOUR JOB: Write an interpretation that talks about THE EXACT THINGS mentioned in the dream above. 
 
-ANALYSIS:
-- Dream Type: ${analysis.dreamType}
-- Emotions: ${analysis.emotions.join(', ')}
-- Symbols: ${analysis.symbols.join(', ')}
-- Themes: ${analysis.themes.join(', ')}
-- Intensity: ${analysis.intensity}
+CRITICAL RULES:
+1. Mention the SPECIFIC people, places, objects, and events from the dream
+2. If the dream mentions a person's name - use that name in your interpretation
+3. If the dream mentions specific actions (like "playing cricket", "hitting a six", "getting a jersey") - talk about those exact actions
+4. If the dream mentions specific objects (like "jersey", "ball", "bat") - reference those objects
+5. Make it personal to THIS specific dream - don't give generic interpretations
+
+LANGUAGE RULES:
+- Use SIMPLE words everyone knows (like talking to a 12-year-old)
+- Write like you're talking to a friend
+- NEVER use: "signifies", "symbolizes", "transcendence", "transformation", "represents", "embodies"
+- USE: "means", "shows", "tells you", "is about", "suggests", "points to"
+- Short sentences (10-15 words max)
+- Be warm, encouraging, and personal
+
+DREAM ANALYSIS:
+- Type: ${analysis.dreamType}
+- Emotions detected: ${analysis.emotions.length > 0 ? analysis.emotions.join(', ') : 'joy, excitement'}
+- Symbols found: ${analysis.symbols.length > 0 ? analysis.symbols.join(', ') : 'various'}
+- Themes: ${analysis.themes.length > 0 ? analysis.themes.join(', ') : 'personal experience'}
 
 ${isNegative ? 
-  'This appears to be a challenging dream. Please provide a comforting interpretation that:' :
-  'Please provide an uplifting interpretation that:'}
+  'This seems like a challenging dream. Focus on healing, growth, and finding strength.' :
+  'This is a positive dream! Celebrate what it shows about the dreamer.'}
 
-1. Explains the dream's meaning in a gentle, understanding way
-2. ${isNegative ? 'Focuses on healing, growth, and inner strength' : 'Celebrates the positive aspects and potential'}
-3. Provides practical, gentle advice for the dreamer
-4. Ends with a message of hope and encouragement
-5. Uses a warm, caring tone throughout
+Write your response in this EXACT format:
 
-Format your response as:
-TITLE: [A comforting, hopeful title]
-MEANING: [The dream's deeper meaning]
-GUIDANCE: [Gentle emotional guidance]
-COMFORT: [A comforting message]
-ADVICE: [Practical advice]
-HOPE: [A message of hope and strength]`;
+TITLE: [A specific title that mentions key people/things from the dream - use simple words]
+MEANING: [What this dream means - reference the specific people, actions, and objects from the dream. Use simple words.]
+GUIDANCE: [How the dreamer should feel about this - mention the emotions from the dream]
+COMFORT: [A warm message about this specific dream - reference the actual events]
+ADVICE: [What the dreamer should do - relate it to the themes from the dream]
+HOPE: [A hopeful message - connect it to what happened in the dream]
+
+REMEMBER: Talk about the ACTUAL things from the dream above. Use the person's name if mentioned. Reference the specific actions and objects. Make it personal.`;
   }
 
   /**
@@ -216,24 +285,94 @@ HOPE: [A message of hope and strength]`;
       confidence: 0.8
     };
 
-    // Parse structured response
+    // Parse structured response - more flexible matching
+    let currentSection = '';
+    let currentText = '';
+    
     for (const line of lines) {
-      if (line.startsWith('TITLE:')) {
-        interpretation.title = line.replace('TITLE:', '').trim();
-      } else if (line.startsWith('MEANING:')) {
-        interpretation.meaning = line.replace('MEANING:', '').trim();
-      } else if (line.startsWith('GUIDANCE:')) {
-        interpretation.emotionalGuidance = line.replace('GUIDANCE:', '').trim();
-      } else if (line.startsWith('COMFORT:')) {
-        interpretation.comfortMessage = line.replace('COMFORT:', '').trim();
-      } else if (line.startsWith('ADVICE:')) {
-        interpretation.actionAdvice = line.replace('ADVICE:', '').trim();
-      } else if (line.startsWith('HOPE:')) {
-        interpretation.hopeMessage = line.replace('HOPE:', '').trim();
+      const trimmedLine = line.trim();
+      
+      // Check for section headers (case-insensitive, with or without colon)
+      if (trimmedLine.match(/^TITLE:?/i)) {
+        if (currentSection && currentText) {
+          this.setInterpretationField(interpretation, currentSection, currentText.trim());
+        }
+        currentSection = 'title';
+        currentText = trimmedLine.replace(/^TITLE:?/i, '').trim();
+      } else if (trimmedLine.match(/^MEANING:?/i)) {
+        if (currentSection && currentText) {
+          this.setInterpretationField(interpretation, currentSection, currentText.trim());
+        }
+        currentSection = 'meaning';
+        currentText = trimmedLine.replace(/^MEANING:?/i, '').trim();
+      } else if (trimmedLine.match(/^GUIDANCE:?/i)) {
+        if (currentSection && currentText) {
+          this.setInterpretationField(interpretation, currentSection, currentText.trim());
+        }
+        currentSection = 'guidance';
+        currentText = trimmedLine.replace(/^GUIDANCE:?/i, '').trim();
+      } else if (trimmedLine.match(/^COMFORT:?/i)) {
+        if (currentSection && currentText) {
+          this.setInterpretationField(interpretation, currentSection, currentText.trim());
+        }
+        currentSection = 'comfort';
+        currentText = trimmedLine.replace(/^COMFORT:?/i, '').trim();
+      } else if (trimmedLine.match(/^ADVICE:?/i)) {
+        if (currentSection && currentText) {
+          this.setInterpretationField(interpretation, currentSection, currentText.trim());
+        }
+        currentSection = 'advice';
+        currentText = trimmedLine.replace(/^ADVICE:?/i, '').trim();
+      } else if (trimmedLine.match(/^HOPE:?/i)) {
+        if (currentSection && currentText) {
+          this.setInterpretationField(interpretation, currentSection, currentText.trim());
+        }
+        currentSection = 'hope';
+        currentText = trimmedLine.replace(/^HOPE:?/i, '').trim();
+      } else if (currentSection && trimmedLine && !trimmedLine.match(/^[A-Z]+:?$/)) {
+        // Continue building current section (skip lines that look like new headers)
+        currentText += (currentText ? ' ' : '') + trimmedLine;
       }
+    }
+    
+    // Set the last section
+    if (currentSection && currentText) {
+      this.setInterpretationField(interpretation, currentSection, currentText.trim());
+    }
+
+    // Validate that we got meaningful content
+    if (interpretation.meaning === 'Your dream is a reflection of your inner world and experiences.' && 
+        interpretation.title === 'Your Dream Holds Special Meaning') {
+      console.warn('⚠️ Parsed interpretation seems generic, AI response may not have been parsed correctly');
+      console.log('Raw AI response (first 500 chars):', aiResponse.substring(0, 500));
     }
 
     return interpretation;
+  }
+
+  private setInterpretationField(interpretation: DreamInterpretation, section: string, text: string): void {
+    if (!text) return;
+    
+    switch (section.toLowerCase()) {
+      case 'title':
+        interpretation.title = text;
+        break;
+      case 'meaning':
+        interpretation.meaning = text;
+        break;
+      case 'guidance':
+        interpretation.emotionalGuidance = text;
+        break;
+      case 'comfort':
+        interpretation.comfortMessage = text;
+        break;
+      case 'advice':
+        interpretation.actionAdvice = text;
+        break;
+      case 'hope':
+        interpretation.hopeMessage = text;
+        break;
+    }
   }
 
   /**
@@ -250,9 +389,19 @@ HOPE: [A message of hope and strength]`;
       'fire': ['fire', 'flame', 'burning', 'smoke', 'heat'],
       'light': ['light', 'bright', 'sunshine', 'glow', 'illumination'],
       'darkness': ['dark', 'shadow', 'black', 'night', 'gloom'],
-      'people': ['person', 'people', 'friend', 'family', 'stranger', 'ex', 'loved one'],
+      'people': ['person', 'people', 'friend', 'family', 'stranger', 'ex', 'loved one', 'meeting', 'met'],
       'vehicles': ['car', 'bus', 'train', 'plane', 'bike', 'driving'],
-      'nature': ['tree', 'forest', 'garden', 'flower', 'grass', 'leaf']
+      'nature': ['tree', 'forest', 'garden', 'flower', 'grass', 'leaf'],
+      'sports': ['cricket', 'football', 'soccer', 'basketball', 'tennis', 'playing', 'game', 'match', 'ball', 'bat', 'bowling', 'batting', 'field', 'stadium', 'jersey', 'uniform', 'six', 'four', 'wicket', 'run', 'score'],
+      'fame': ['celebrity', 'famous', 'star', 'hero', 'idol', 'icon', 'legend', 'signed', 'autograph'],
+      'achievement': ['win', 'winning', 'success', 'victory', 'trophy', 'medal', 'award', 'accomplishment'],
+      'pain': ['pain', 'ache', 'hurt', 'sore', 'stabbing', 'sharp', 'tearing', 'cramp', 'discomfort'],
+      'bleeding': ['bleeding', 'blood', 'bleed', 'hemorrhage', 'wound', 'cut'],
+      'internal_organs': ['abdomen', 'stomach', 'intestines', 'appendix', 'liver', 'kidneys', 'kidney', 'organ', 'internal', 'body'],
+      'waking': ['woke', 'waking', 'awake', 'wake up', 'pulled out', 'instantly'],
+      'physical_sensation': ['felt', 'feeling', 'sensation', 'physical', 'real', 'actual'],
+      'memory': ['memory', 'remember', 'remembered', 'past', 'years ago', 'history'],
+      'subconscious': ['subconscious', 'brain', 'mind']
     };
 
     const foundSymbols: string[] = [];
@@ -281,7 +430,9 @@ HOPE: [A message of hope and strength]`;
       'excitement': ['excited', 'thrilled', 'energetic', 'pumped', 'enthusiastic'],
       'nostalgia': ['nostalgic', 'memories', 'remembering', 'past', 'childhood'],
       'anxiety': ['anxious', 'nervous', 'worried', 'stressed', 'tense', 'uneasy'],
-      'freedom': ['free', 'liberated', 'unbound', 'unrestricted', 'independent']
+      'freedom': ['free', 'liberated', 'unbound', 'unrestricted', 'independent'],
+      'pain': ['pain', 'hurt', 'aching', 'sore', 'discomfort'],
+      'shock': ['shock', 'shocked', 'sudden', 'suddenly', 'instantly', 'immediately']
     };
 
     const foundEmotions: string[] = [];
@@ -393,13 +544,22 @@ HOPE: [A message of hope and strength]`;
    */
   private async tryFreeAPIs(prompt: string): Promise<string | null> {
     // Try Gemini first
+    console.log('🆓 [Dream Interpretation] Attempting Gemini API (free)...');
     const geminiResponse = await this.tryGeminiInterpretation(prompt);
-    if (geminiResponse) return geminiResponse;
+    if (geminiResponse) {
+      console.log('✅ [Dream Interpretation] SUCCESS: Using Gemini API (free)');
+      return geminiResponse;
+    }
 
     // Try Hugging Face as backup
+    console.log('🆓 [Dream Interpretation] Gemini failed, attempting Hugging Face API (free)...');
     const hfResponse = await this.tryHuggingFaceInterpretation(prompt);
-    if (hfResponse) return hfResponse;
+    if (hfResponse) {
+      console.log('✅ [Dream Interpretation] SUCCESS: Using Hugging Face API (free)');
+      return hfResponse;
+    }
 
+    console.log('❌ [Dream Interpretation] Both free APIs failed');
     return null;
   }
 
@@ -410,11 +570,11 @@ HOPE: [A message of hope and strength]`;
     try {
       const geminiApiKey = Deno.env.get('GEMINI_API_KEY');
       if (!geminiApiKey) {
-        console.log('🔍 No Gemini API key found, using fallback');
+        console.log('⚠️ [Dream Interpretation] GEMINI_API_KEY not found in environment');
         return null;
       }
 
-      console.log('🆓 Trying Gemini API (free)...');
+      console.log('🆓 [Dream Interpretation] GEMINI_API_KEY found, calling Gemini API...');
       
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${geminiApiKey}`, {
         method: 'POST',
@@ -444,20 +604,22 @@ ${prompt}`
       });
 
       if (!response.ok) {
-        console.log(`❌ Gemini API error: ${response.status}`);
+        const errorText = await response.text();
+        console.log(`❌ [Dream Interpretation] Gemini API error: ${response.status} - ${errorText.substring(0, 100)}`);
         return null;
       }
 
       const result = await response.json();
       if (result.candidates && result.candidates[0] && result.candidates[0].content) {
         const geminiResponse = result.candidates[0].content.parts[0].text;
-        console.log('✅ Gemini API successful!');
+        console.log('✅ [Dream Interpretation] Gemini API response received');
         return geminiResponse;
       }
 
+      console.log('⚠️ [Dream Interpretation] Gemini API returned unexpected format');
       return null;
     } catch (error) {
-      console.log('❌ Gemini API failed:', error.message);
+      console.log(`❌ [Dream Interpretation] Gemini API exception: ${error.message}`);
       return null;
     }
   }
@@ -469,11 +631,11 @@ ${prompt}`
     try {
       const hfToken = Deno.env.get('HUGGINGFACE_API_KEY');
       if (!hfToken) {
-        console.log('🔍 No Hugging Face API key found');
+        console.log('⚠️ [Dream Interpretation] HUGGINGFACE_API_KEY not found in environment');
         return null;
       }
 
-      console.log('🆓 Trying Hugging Face API (free)...');
+      console.log('🆓 [Dream Interpretation] HUGGINGFACE_API_KEY found, calling Hugging Face API...');
       
       const response = await fetch('https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium', {
         method: 'POST',
@@ -492,19 +654,21 @@ ${prompt}`
       });
 
       if (!response.ok) {
-        console.log(`❌ Hugging Face API error: ${response.status}`);
+        const errorText = await response.text();
+        console.log(`❌ [Dream Interpretation] Hugging Face API error: ${response.status} - ${errorText.substring(0, 100)}`);
         return null;
       }
 
       const result = await response.json();
       if (result && result[0] && result[0].generated_text) {
-        console.log('✅ Hugging Face API successful!');
+        console.log('✅ [Dream Interpretation] Hugging Face API response received');
         return result[0].generated_text;
       }
 
+      console.log('⚠️ [Dream Interpretation] Hugging Face API returned unexpected format');
       return null;
     } catch (error) {
-      console.log('❌ Hugging Face API failed:', error.message);
+      console.log(`❌ [Dream Interpretation] Hugging Face API exception: ${error.message}`);
       return null;
     }
   }

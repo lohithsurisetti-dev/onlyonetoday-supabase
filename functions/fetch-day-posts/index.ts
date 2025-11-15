@@ -10,12 +10,12 @@ serve(async (req) => {
         headers: {
           'Access-Control-Allow-Origin': '*',
           'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-          'Access-Control-Allow-Methods': 'GET, OPTIONS',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
         },
       });
     }
 
-    if (req.method !== 'GET') {
+    if (req.method !== 'GET' && req.method !== 'POST') {
       return new Response(
         JSON.stringify({ success: false, error: 'Method not allowed' }),
         { status: 405, headers: { 'Content-Type': 'application/json' } }
@@ -29,11 +29,24 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
     const supabaseClient = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Parse query parameters
+    // Parse parameters (from query string for GET, or body for POST)
+    let dayOfWeek: string | null = null;
+    let limit = 10;
+    let todayOnly = true;
+
+    if (req.method === 'POST') {
+      // POST: read from body
+      const body = await req.json().catch(() => ({}));
+      dayOfWeek = body.dayOfWeek || null;
+      limit = Math.min(parseInt(body.limit || '10'), 100);
+      todayOnly = body.todayOnly !== undefined ? body.todayOnly : true;
+    } else {
+      // GET: read from query params
     const url = new URL(req.url);
-    const dayOfWeek = url.searchParams.get('dayOfWeek');
-    const limit = Math.min(parseInt(url.searchParams.get('limit') || '10'), 100);
-    const todayOnly = url.searchParams.get('todayOnly') === 'true';
+      dayOfWeek = url.searchParams.get('dayOfWeek');
+      limit = Math.min(parseInt(url.searchParams.get('limit') || '10'), 100);
+      todayOnly = url.searchParams.get('todayOnly') === 'true';
+    }
 
     // Validate day parameter
     const validDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
@@ -46,11 +59,17 @@ serve(async (req) => {
 
     console.log(`📊 Fetching posts for ${dayOfWeek}, todayOnly: ${todayOnly}`);
 
-    // Build query
+    // Build query - use posts table (unified)
+    // Filter for themed day posts only (not day summaries)
+    // Themed day posts: have day_of_week but NO activities (activities IS NULL)
+    // Day summaries: have day_of_week AND activities (activities IS NOT NULL)
     let query = supabaseClient
-      .from('day_posts')
-      .select('*')
+      .from('posts')
+      .select('id, content, user_id, day_of_week, reactions, scope, location_city, location_state, location_country, created_at')
+      .eq('input_type', 'day')
       .eq('day_of_week', dayOfWeek)
+      .is('activities', null) // Only themed day posts (exclude day summaries which have activities)
+      .eq('moderation_status', 'approved') // Only show approved posts
       .order('created_at', { ascending: false })
       .limit(limit);
 
@@ -105,6 +124,13 @@ serve(async (req) => {
       else if (diffHours >= 1 && diffHours < 24) timeAgo = `${diffHours}h`;
       else if (diffDays >= 1) timeAgo = `${diffDays}d`;
 
+      // Format location
+      const locationParts = [];
+      if (post.location_city) locationParts.push(post.location_city);
+      if (post.location_state) locationParts.push(post.location_state);
+      if (post.location_country) locationParts.push(post.location_country);
+      const location = locationParts.length > 0 ? locationParts.join(', ') : null;
+
       return {
         id: post.id,
         content: post.content,
@@ -115,7 +141,11 @@ serve(async (req) => {
         timeAgo,
         reactionCounts: post.reactions || { first: 0, second: 0, third: 0 },
         weekNumber: Math.ceil(createdAt.getTime() / (7 * 24 * 60 * 60 * 1000)),
-        scope: 'world', // Day posts are always world scope
+        scope: post.scope || 'world',
+        location: location,
+        location_city: post.location_city,
+        location_state: post.location_state,
+        location_country: post.location_country,
         created_at: post.created_at
       };
     });

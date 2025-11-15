@@ -44,15 +44,16 @@ export class AIDreamExtractionService {
     try {
       console.log('🤖 Extracting dream elements with AI...');
 
-      // Try free APIs first, then fallback to OpenAI
-      let result = await this.tryFreeAPIs(content);
+      // Try OpenAI first (primary, most reliable for structured extraction)
+      let result = await this.tryOpenAI(content);
       
+      // Fallback to free APIs if OpenAI fails
       if (!result) {
-        result = await this.tryOpenAI(content);
+        result = await this.tryFreeAPIs(content);
       }
 
+      // Final fallback to basic extraction
       if (!result) {
-        // Fallback to basic extraction
         result = this.getFallbackExtraction(content);
       }
 
@@ -65,7 +66,7 @@ export class AIDreamExtractionService {
   }
 
   /**
-   * Try free APIs first (Gemini, Hugging Face)
+   * Try free APIs as fallback (Gemini, Hugging Face)
    */
   private async tryFreeAPIs(content: string): Promise<DreamExtractionResult | null> {
     // Try Gemini first
@@ -161,7 +162,7 @@ export class AIDreamExtractionService {
   }
 
   /**
-   * Try OpenAI API as fallback
+   * Try OpenAI API (primary, most reliable for structured extraction)
    */
   private async tryOpenAI(content: string): Promise<DreamExtractionResult | null> {
     if (!this.openaiApiKey) {

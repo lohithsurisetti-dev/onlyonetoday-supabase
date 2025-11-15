@@ -4,7 +4,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { DreamPost, CreateDreamRequest, DreamPostResult, DreamMatch, DreamAnalytics } from '../types/DreamTypes.ts';
 import { DreamEmbeddingService } from './DreamEmbeddingService.ts';
 import { ModerationPipeline } from './ModerationPipeline.ts';
-import { PercentileService } from './PercentileService.ts';
+import { DreamMatcherV2 } from './DreamMatcherV2.ts';
+import { DreamInterpretationService } from './DreamInterpretationService.ts';
 
 /**
  * Dream Post Service
@@ -13,22 +14,24 @@ import { PercentileService } from './PercentileService.ts';
 
 export class DreamPostService {
   private supabase: any;
-  private embeddingService: DreamEmbeddingService;
+  private embeddingService: DreamEmbeddingService; // Keep for fallback pattern matching
   private moderationPipeline: ModerationPipeline;
-  private percentileService: PercentileService;
+  private dreamMatcherV2: DreamMatcherV2; // NEW: V2 matching (no embeddings)
+  private interpretationService: DreamInterpretationService; // For dream insights
 
   constructor() {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     this.supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    this.embeddingService = new DreamEmbeddingService();
+    this.embeddingService = new DreamEmbeddingService(); // Keep for fallback pattern matching
     this.moderationPipeline = new ModerationPipeline({
       allowDreams: true,
       allowSymbolicContent: true,
       strictMode: false
     });
-    this.percentileService = new PercentileService();
+    this.dreamMatcherV2 = new DreamMatcherV2(this.supabase); // NEW: V2 matching
+    this.interpretationService = new DreamInterpretationService(); // For dream insights
   }
 
   /**
@@ -69,56 +72,60 @@ export class DreamPostService {
       let processedSymbols: string[] = [];
       let processedEmotions: string[] = [];
 
-      // Process user-provided symbols or extract if empty
-      if (symbols.length > 0) {
-        // For user-provided symbols, we'll directly use them and let the DB functions handle creation/lookup
-        processedSymbols = symbols;
-        console.log(`✅ User-provided symbols: ${processedSymbols.join(', ')}`);
-      } else {
-        // No symbols provided, try custom extraction first
-        processedSymbols = await this.embeddingService.extractDreamSymbols(request.content);
-        console.log(`🔍 Custom extracted symbols: ${processedSymbols.join(', ')}`);
-      }
-
-      // Process user-provided emotions or extract if empty
-      if (emotions.length > 0) {
-        // For user-provided emotions, we'll directly use them and let the DB functions handle creation/lookup
-        processedEmotions = emotions;
-        console.log(`✅ User-provided emotions: ${processedEmotions.join(', ')}`);
-      } else {
-        // No emotions provided, try custom extraction first
-        processedEmotions = await this.embeddingService.extractDreamEmotions(request.content);
-        console.log(`💭 Custom extracted emotions: ${processedEmotions.join(', ')}`);
-      }
-
-      // If custom extraction found limited results, try AI as fallback
-      if (processedSymbols.length === 0 || processedEmotions.length === 0) {
+      // Use AI extraction as primary method (dynamic, works for any dream content)
+      // Only extract if user hasn't provided symbols/emotions
+      // Add timeout to prevent blocking (20 seconds max)
+      let aiExtractionResult: any = null;
+      
+      if (symbols.length === 0 || emotions.length === 0) {
         try {
-          console.log('🤖 Custom extraction found limited results, trying AI...');
+          console.log('🤖 Extracting symbols and emotions with AI (dynamic extraction for any dream)...');
           const aiExtractionService = new (await import('./AIDreamExtractionService.ts')).AIDreamExtractionService();
-          const extractionResult = await aiExtractionService.extractDreamElements(request.content);
           
-          if (processedSymbols.length === 0) {
-            const aiSymbols = extractionResult.symbols.map(s => s.symbol);
-            if (aiSymbols.length > 0) {
-              processedSymbols = aiSymbols;
-              console.log(`🤖 AI extracted symbols: ${processedSymbols.join(', ')}`);
-            }
-          }
+          // Add timeout wrapper (20 seconds) to prevent blocking
+          const extractionPromise = aiExtractionService.extractDreamElements(request.content);
+          const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('AI extraction timeout after 20 seconds')), 20000);
+          });
           
-          if (processedEmotions.length === 0) {
-            const aiEmotions = extractionResult.emotions.map(e => e.emotion);
-            if (aiEmotions.length > 0) {
-              processedEmotions = aiEmotions;
-              console.log(`🤖 AI extracted emotions: ${processedEmotions.join(', ')}`);
-            }
-          }
+          aiExtractionResult = await Promise.race([extractionPromise, timeoutPromise]) as any;
         } catch (error) {
-          console.log('⚠️ AI extraction failed, keeping custom results:', error);
+          console.log('⚠️ AI extraction failed or timed out, will use fallback pattern matching:', error);
+          // Continue with fallback - pattern matching will be used
         }
       }
 
-      // Generate dream embedding
+      // Process user-provided symbols or use AI-extracted symbols
+      if (symbols.length > 0) {
+        // For user-provided symbols, we'll directly use them
+        processedSymbols = symbols;
+        console.log(`✅ User-provided symbols: ${processedSymbols.join(', ')}`);
+      } else if (aiExtractionResult && aiExtractionResult.symbols.length > 0) {
+        // Use AI-extracted symbols (dynamic, works for any dream content)
+        processedSymbols = aiExtractionResult.symbols.map((s: any) => s.symbol);
+        console.log(`🤖 AI extracted symbols: ${processedSymbols.join(', ')}`);
+      } else {
+        // Fallback to pattern matching only if AI returns nothing or failed
+        processedSymbols = await this.embeddingService.extractDreamSymbols(request.content);
+        console.log(`🔍 Fallback pattern-extracted symbols: ${processedSymbols.join(', ')}`);
+      }
+
+      // Process user-provided emotions or use AI-extracted emotions
+      if (emotions.length > 0) {
+        // For user-provided emotions, we'll directly use them
+        processedEmotions = emotions;
+        console.log(`✅ User-provided emotions: ${processedEmotions.join(', ')}`);
+      } else if (aiExtractionResult && aiExtractionResult.emotions.length > 0) {
+        // Use AI-extracted emotions (dynamic, works for any dream content)
+        processedEmotions = aiExtractionResult.emotions.map((e: any) => e.emotion);
+        console.log(`🤖 AI extracted emotions: ${processedEmotions.join(', ')}`);
+      } else {
+        // Fallback to pattern matching only if AI returns nothing or failed
+        processedEmotions = await this.embeddingService.extractDreamEmotions(request.content);
+        console.log(`🔍 Fallback pattern-extracted emotions: ${processedEmotions.join(', ')}`);
+      }
+
+      // Create dream post object
       const dreamPost: DreamPost = {
         content: request.content.trim(),
         dreamType: request.dreamType,
@@ -134,83 +141,158 @@ export class DreamPostService {
         userId: undefined // For now, use undefined for anonymous posts
       };
 
-      const dreamEmbedding = await this.embeddingService.generateDreamEmbedding(dreamPost);
-
-      // Find similar dreams
-      const similarDreams = await this.findSimilarDreams(dreamEmbedding, dreamPost);
-
-      // Calculate percentile and tier
-      const percentileResult = await this.percentileService.calculateDreamPercentile(
-        dreamPost,
-        similarDreams
+      // V2: Find similar dreams using symbols + emotions + keywords (NO EMBEDDINGS)
+      console.log('🔍 V2: Finding similar dreams using symbol + emotion + keyword matching...');
+      const similarDreamsResult = await this.dreamMatcherV2.findSimilarDreams(
+        {
+          content: dreamPost.content,
+          dreamType: dreamPost.dreamType,
+          symbols: dreamPost.symbols,
+          emotions: dreamPost.emotions,
+          clarity: dreamPost.clarity
+        },
+        request.scope,
+        {
+          city: request.locationCity,
+          state: request.locationState,
+          country: request.locationCountry
+        }
       );
 
-      // Insert into database
+      // Convert to DreamMatch format for compatibility
+      const similarDreams: DreamMatch[] = similarDreamsResult.matches.map((match: any) => ({
+        postId: match.id,
+        similarity: 0.85, // V2 doesn't use similarity scores, use default
+        matchType: 'combined' as const,
+        sharedSymbols: this.findSharedSymbols(dreamPost.symbols, match.symbols || []),
+        sharedEmotions: this.findSharedEmotions(dreamPost.emotions, match.emotions || [])
+      }));
+
+      // Skip percentile calculation for performance (not needed for core functionality)
+
+      // OPTIMIZATION: Save dream immediately, generate interpretation asynchronously
+      // This allows us to return immediately to the user (much faster response time)
+      const interpretationText = request.interpretation; // Use user-provided if available
+
+      // Insert into database FIRST (fast response - no waiting for AI)
       const { data: postData, error: insertError } = await this.supabase
         .from('dream_posts')
         .insert({
           content: dreamPost.content,
           dream_type: dreamPost.dreamType,
           clarity: dreamPost.clarity,
-          interpretation: dreamPost.interpretation,
+          // Store user-provided interpretation if available, otherwise null (will be updated async)
+          interpretation: interpretationText ? JSON.stringify({
+            title: 'Your Dream',
+            meaning: interpretationText,
+            emotionalGuidance: 'Take time to reflect on what this dream means to you.',
+            comfortMessage: 'Dreams are a window into your inner world.',
+            actionAdvice: 'Consider journaling about this dream to explore its meaning.',
+            hopeMessage: 'Every dream carries wisdom and insight.',
+            isPositive: true,
+            confidence: 0.7,
+          }) : null,
           is_anonymous: dreamPost.isAnonymous,
           scope: dreamPost.scope,
           location_city: dreamPost.locationCity,
           location_state: dreamPost.locationState,
           location_country: dreamPost.locationCountry,
           user_id: dreamPost.userId,
-          content_embedding: dreamEmbedding.contentEmbedding,
-          symbol_embedding: dreamEmbedding.symbolEmbedding,
-          emotion_embedding: dreamEmbedding.emotionEmbedding,
-          combined_embedding: dreamEmbedding.combinedEmbedding,
-          tier: percentileResult.tier,
-          percentile: percentileResult.percentile,
-          match_count: similarDreams.length
+          // Embeddings and percentile removed for performance
+          // Matching uses symbols + emotions + keywords (V2)
+          match_count: similarDreamsResult.matchCount // V2 match count
+          // Note: total_in_scope not stored in dream_posts table (can be calculated on demand)
         })
         .select()
         .single();
 
       if (insertError) {
         console.error('❌ Database insert error:', insertError);
+        console.error('❌ Error details:', JSON.stringify(insertError, null, 2));
         return {
           success: false,
-          error: 'Failed to save dream post'
+          error: `Failed to save dream post: ${insertError.message || insertError.details || 'Unknown error'}`
         };
       }
 
-      // Insert symbols and emotions into junction tables
-      for (const symbolName of processedSymbols) {
-        const { data: symbolIdData, error: symbolError } = await this.supabase.rpc('get_or_create_symbol', {
-          symbol_name: symbolName,
-          symbol_category: 'general' // AI can provide this later
-        });
-        if (symbolError) {
-          console.error('Error getting or creating symbol:', symbolError);
-          continue;
-        }
-        await this.supabase.from('dream_post_symbols').insert({
-          dream_post_id: postData.id,
-          symbol_id: symbolIdData
+      // OPTIMIZATION: Start interpretation generation in background (don't wait)
+      // This allows us to return immediately to the user
+      if (!interpretationText && request.content && request.content.trim().length > 0) {
+        console.log(`🚀 [Background] Starting async interpretation generation for dream ${postData.id}...`);
+        console.log(`📝 [Background] Content length: ${request.content.length}, Dream type: ${request.dreamType}`);
+        console.log(`🎭 [Background] Emotions: ${processedEmotions.length}, Symbols: ${processedSymbols.length}`);
+        
+        // Use setTimeout with small delay to ensure response is sent first
+        // This prevents the Edge Function from terminating before the async task starts
+        // The delay is minimal (50ms) but ensures the HTTP response is fully sent
+        setTimeout(() => {
+          this.generateInterpretationAsync(
+            postData.id,
+            request.content,
+            request.dreamType,
+            processedEmotions,
+            processedSymbols,
+            request.clarity || 5
+          ).catch(err => {
+            console.error('❌ [Background] Interpretation generation failed:', err);
+            console.error('❌ [Background] Error stack:', err?.stack);
+            // Non-blocking - dream is already saved
+          });
+        }, 50); // Small delay to ensure response is sent
+      } else {
+        console.log(`⏭️ [Background] Skipping interpretation generation:`, {
+          hasInterpretationText: !!interpretationText,
+          hasContent: !!request.content,
+          contentLength: request.content?.length || 0
         });
       }
 
-      for (const emotionName of processedEmotions) {
-        const { data: emotionIdData, error: emotionError } = await this.supabase.rpc('get_or_create_emotion', {
-          emotion_name: emotionName,
-          intensity: 5 // AI can provide this later
-        });
-        if (emotionError) {
-          console.error('Error getting or creating emotion:', emotionError);
-          continue;
-        }
-        await this.supabase.from('dream_post_emotions').insert({
-          dream_post_id: postData.id,
-          emotion_id: emotionIdData
-        });
-      }
+      // OPTIMIZATION: Insert symbols and emotions in parallel (don't block response)
+      // Process in background - user doesn't need to wait for these
+      Promise.allSettled([
+        ...processedSymbols.map(async (symbolName) => {
+          try {
+            const { data: symbolIdData, error: symbolError } = await this.supabase.rpc('get_or_create_symbol', {
+              symbol_name: symbolName,
+              symbol_category: 'general'
+            });
+            if (!symbolError && symbolIdData) {
+              await this.supabase.from('dream_post_symbols').insert({
+                dream_post_id: postData.id,
+                symbol_id: symbolIdData
+              });
+            }
+          } catch (error) {
+            console.error(`❌ Error processing symbol ${symbolName}:`, error);
+          }
+        }),
+        ...processedEmotions.map(async (emotionName) => {
+          try {
+            const { data: emotionIdData, error: emotionError } = await this.supabase.rpc('get_or_create_emotion', {
+              emotion_name: emotionName,
+              intensity: 5
+            });
+            if (!emotionError && emotionIdData) {
+              await this.supabase.from('dream_post_emotions').insert({
+                dream_post_id: postData.id,
+                emotion_id: emotionIdData
+              });
+            }
+          } catch (error) {
+            console.error(`❌ Error processing emotion ${emotionName}:`, error);
+          }
+        })
+      ]).catch(err => {
+        console.error('❌ Error in parallel symbol/emotion processing:', err);
+        // Non-blocking - dream is already saved
+      });
 
-      // Get analytics
-      const analytics = await this.getDreamAnalytics();
+      // OPTIMIZATION: Get analytics in parallel (don't block response)
+      // Analytics can be fetched asynchronously
+      const analyticsPromise = this.getDreamAnalytics().catch(err => {
+        console.error('❌ Analytics fetch failed:', err);
+        return this.getDefaultAnalytics();
+      });
 
       console.log(`✅ Dream post created successfully: ${postData.id}`);
 
@@ -221,12 +303,32 @@ export class DreamPostService {
           symbols: processedSymbols,
           emotions: processedEmotions,
           dreamMatches: similarDreams,
-          displayText: percentileResult.displayText,
-          badge: percentileResult.badge,
-          message: percentileResult.message,
-          comparison: percentileResult.comparison
+          matchCount: similarDreamsResult.matchCount, // V2 match count
+          totalInScope: similarDreamsResult.totalInScope, // V2 total in scope
+          // Percentile fields removed for performance
+          // Dream insights (interpretation generated in background, will be available shortly)
+          // Return placeholder so UI can show skeletons while waiting for async interpretation
+          interpretation: interpretationText ? {
+            title: 'Your Dream',
+            meaning: interpretationText,
+            emotionalGuidance: 'Take time to reflect on what this dream means to you.',
+            comfortMessage: 'Dreams are a window into your inner world.',
+            actionAdvice: 'Consider journaling about this dream to explore its meaning.',
+            hopeMessage: 'Every dream carries wisdom and insight.',
+            isPositive: true,
+            confidence: 0.7,
+          } : {
+            title: 'Your Dream',
+            meaning: 'Your dream is being interpreted...',
+            emotionalGuidance: 'Take time to reflect on what this dream means to you.',
+            comfortMessage: 'Dreams are a window into your inner world.',
+            actionAdvice: 'Consider journaling about this dream to explore its meaning.',
+            hopeMessage: 'Every dream carries wisdom and insight.',
+            isPositive: true,
+            confidence: 0.5,
+          }
         },
-        analytics: analytics
+        analytics: await analyticsPromise
       };
 
     } catch (error) {
@@ -239,7 +341,8 @@ export class DreamPostService {
   }
 
   /**
-   * Find similar dreams using vector similarity
+   * Find similar dreams using vector similarity (DEPRECATED - Use DreamMatcherV2 instead)
+   * Kept for backward compatibility, but V2 matching is preferred
    */
   private async findSimilarDreams(
     dreamEmbedding: any,
@@ -537,6 +640,23 @@ export class DreamPostService {
   }
 
   /**
+   * Format interpretation object into text for database storage
+   */
+  private formatInterpretation(interpretation: any): string {
+    if (!interpretation) return '';
+    
+    const parts = [];
+    if (interpretation.title) parts.push(`Title: ${interpretation.title}`);
+    if (interpretation.meaning) parts.push(`Meaning: ${interpretation.meaning}`);
+    if (interpretation.emotionalGuidance) parts.push(`Guidance: ${interpretation.emotionalGuidance}`);
+    if (interpretation.comfortMessage) parts.push(`Comfort: ${interpretation.comfortMessage}`);
+    if (interpretation.actionAdvice) parts.push(`Advice: ${interpretation.actionAdvice}`);
+    if (interpretation.hopeMessage) parts.push(`Hope: ${interpretation.hopeMessage}`);
+    
+    return parts.join('\n\n');
+  }
+
+  /**
    * Validate dream request
    */
   private validateDreamRequest(request: CreateDreamRequest): { valid: boolean; error?: string } {
@@ -672,6 +792,80 @@ export class DreamPostService {
         success: false,
         error: error.message
       };
+    }
+  }
+
+  /**
+   * Generate interpretation asynchronously in background
+   * Updates the dream post with interpretation when ready
+   */
+  private async generateInterpretationAsync(
+    dreamId: string,
+    content: string,
+    dreamType: string,
+    emotions: string[],
+    symbols: string[],
+    clarity: number
+  ): Promise<void> {
+    try {
+      console.log(`🔮 [Background] Generating interpretation for dream ${dreamId}...`);
+      console.log(`📊 [Background] Input params:`, {
+        dreamId,
+        contentLength: content.length,
+        dreamType,
+        emotionsCount: emotions.length,
+        symbolsCount: symbols.length,
+        clarity
+      });
+      
+      // Generate interpretation with timeout
+      console.log(`🤖 [Background] Calling interpretationService.interpretDream...`);
+      const interpretationPromise = this.interpretationService.interpretDream(
+        content,
+        dreamType,
+        emotions,
+        symbols,
+        clarity
+      );
+      
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Interpretation timeout after 30 seconds')), 30000);
+      });
+      
+      console.log(`⏳ [Background] Waiting for interpretation (with 30s timeout)...`);
+      const interpretation = await Promise.race([interpretationPromise, timeoutPromise]) as any;
+      
+      console.log(`✅ [Background] Interpretation received:`, {
+        hasTitle: !!interpretation?.title,
+        hasMeaning: !!interpretation?.meaning,
+        meaningLength: interpretation?.meaning?.length,
+        title: interpretation?.title?.substring(0, 50)
+      });
+      
+      // Store interpretation as JSON string (not formatted text) for proper parsing
+      const interpretationJson = JSON.stringify(interpretation);
+      console.log(`💾 [Background] Storing interpretation (${interpretationJson.length} chars) to database...`);
+      
+      // Update dream post with interpretation
+      const { error: updateError, data: updateData } = await this.supabase
+        .from('dream_posts')
+        .update({ interpretation: interpretationJson })
+        .eq('id', dreamId)
+        .select();
+      
+      if (updateError) {
+        console.error(`❌ [Background] Failed to update interpretation for dream ${dreamId}:`, updateError);
+        console.error(`❌ [Background] Update error details:`, JSON.stringify(updateError, null, 2));
+      } else {
+        console.log(`✅ [Background] Interpretation generated and saved for dream ${dreamId}`);
+        console.log(`✅ [Background] Updated rows:`, updateData?.length || 0);
+      }
+    } catch (error) {
+      console.error(`❌ [Background] Interpretation generation failed for dream ${dreamId}:`, error);
+      console.error(`❌ [Background] Error message:`, error?.message);
+      console.error(`❌ [Background] Error stack:`, error?.stack);
+      console.error(`❌ [Background] Error details:`, JSON.stringify(error, Object.getOwnPropertyNames(error)));
+      // Non-blocking - dream is already saved without interpretation
     }
   }
 }

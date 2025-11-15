@@ -6,7 +6,7 @@ interface StatsResponse {
   success: boolean;
   stats?: {
     totalPostsToday: number;
-    sharedExperiencesToday: number;
+    dreamsToday: number;
     totalPosts: number;
   };
   error?: string;
@@ -81,14 +81,21 @@ serve(async (req) => {
       });
     }
 
-    // Calculate shared experiences (posts that found similar matches)
-    const sharedExperiencesToday = todayPosts?.filter(post => 
-      post.match_count && post.match_count > 0
-    ).length || 0;
+    // Get dreams today (dreams are auto-approved, no moderation_status column)
+    const { count: dreamsToday, error: dreamsError } = await supabaseClient
+      .from('dream_posts')
+      .select('*', { count: 'exact', head: true })
+      .gte('created_at', today.toISOString())
+      .lt('created_at', tomorrow.toISOString());
+
+    if (dreamsError) {
+      console.error('❌ Error fetching dreams today:', dreamsError);
+      // Don't fail, just use 0
+    }
 
     const stats = {
       totalPostsToday: todayPosts?.length || 0,
-      sharedExperiencesToday,
+      dreamsToday: dreamsToday || 0,
       totalPosts: totalPosts || 0
     };
 

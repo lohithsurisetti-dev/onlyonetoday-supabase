@@ -15,6 +15,8 @@ import { ModerationPipeline, ModerationResult } from './ModerationPipeline.ts';
 import { KeywordMatcher, SimilarPostsResult } from './KeywordMatcher.ts';
 import { StoryGenerator, PostStory } from './StoryGenerator.ts';
 import { DaySummaryService } from './DaySummaryService.ts';
+import { Stemmer } from './Stemmer.ts';
+import { IrregularVerbs } from './IrregularVerbs.ts';
 // hashContent will be implemented locally
 
 export interface CreatePostRequest {
@@ -68,6 +70,8 @@ export class PostServiceV2 {
   private keywordMatcher: KeywordMatcher;
   private storyGenerator: StoryGenerator;
   private daySummaryService: DaySummaryService;
+  private stemmer: Stemmer;
+  private irregularVerbs: IrregularVerbs;
 
   constructor(supabase: any) {
     this.supabase = supabase;
@@ -83,6 +87,8 @@ export class PostServiceV2 {
     this.keywordMatcher = new KeywordMatcher(supabase);
     this.storyGenerator = new StoryGenerator();
     this.daySummaryService = new DaySummaryService();
+    this.stemmer = new Stemmer();
+    this.irregularVerbs = new IrregularVerbs();
   }
 
   /**
@@ -241,7 +247,7 @@ export class PostServiceV2 {
   /**
    * Validate post (with duplicate check)
    */
-  private async validatePost(request: CreatePostRequest): Promise<ValidationResult> {
+  async validatePost(request: CreatePostRequest): Promise<ValidationResult> {
     // Basic validation
     const minLength = request.inputType === 'day' ? 10 : 3;
     const maxLength = request.inputType === 'day' ? 1000 : 500;
@@ -350,6 +356,7 @@ export class PostServiceV2 {
 
   /**
    * Extract keywords from normalized content
+   * Now includes dynamic stemming + irregular verb matching
    */
   async extractKeywords(
     normalizedContent: string,
@@ -364,7 +371,7 @@ export class PostServiceV2 {
       'my', 'your', 'his', 'her', 'its', 'our', 'their', 'me', 'him', 'her', 'us', 'them'
     ];
 
-    const keywords = normalizedContent
+    const words = normalizedContent
       .toLowerCase()
       .replace(/[^\w\s]/g, ' ') // Remove punctuation
       .split(/\s+/)
@@ -372,10 +379,23 @@ export class PostServiceV2 {
       .filter(w => !stopWords.includes(w))
       .slice(0, 10); // Limit to 10 keywords
 
-    // TODO: Expand with synonyms (from database)
-    // For MVP, return as-is
+    // Normalize words: stem + irregular verbs
+    const normalized: string[] = [];
+    for (const word of words) {
+      // Check if it's an irregular verb first
+      const irregularForms = this.irregularVerbs.getForms(word);
+      if (irregularForms.length > 0) {
+        // Add root form and all forms for matching
+        normalized.push(this.irregularVerbs.getRoot(word), ...irregularForms);
+      } else {
+        // Stem the word
+        const stemmed = this.stemmer.stem(word);
+        normalized.push(stemmed);
+      }
+    }
 
-    return keywords;
+    // Remove duplicates and return
+    return [...new Set(normalized)];
   }
 
   /**

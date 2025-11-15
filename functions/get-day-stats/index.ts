@@ -10,12 +10,12 @@ serve(async (req) => {
         headers: {
           'Access-Control-Allow-Origin': '*',
           'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-          'Access-Control-Allow-Methods': 'GET, OPTIONS',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
         },
       });
     }
 
-    if (req.method !== 'GET') {
+    if (req.method !== 'GET' && req.method !== 'POST') {
       return new Response(
         JSON.stringify({ success: false, error: 'Method not allowed' }),
         { status: 405, headers: { 'Content-Type': 'application/json' } }
@@ -24,7 +24,7 @@ serve(async (req) => {
 
     console.log('📊 Get day stats request received');
 
-    // Initialize Supabase client
+    // Initialize Supabase client (use service role for public stats)
     const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
     const supabaseClient = createClient(supabaseUrl, supabaseServiceKey);
@@ -37,26 +37,39 @@ serve(async (req) => {
 
     const validDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
     
-    // Get counts for all days (today only)
+    // Get counts for all days (today only) - query posts table
     const dayCounts: Record<string, number> = {};
     
     for (const day of validDays) {
-      const { count } = await supabaseClient
-        .from('day_posts')
-        .select('*', { count: 'exact', head: true })
+      const { data, error } = await supabaseClient
+        .from('posts')
+        .select('id', { count: 'exact', head: false })
+        .eq('input_type', 'day')
         .eq('day_of_week', day)
+        .is('activities', null) // Only themed day posts (exclude day summaries)
+        .eq('moderation_status', 'approved')
         .gte('created_at', today.toISOString())
         .lt('created_at', tomorrow.toISOString());
       
-      dayCounts[day] = count || 0;
+      if (error) {
+        console.error(`Error counting ${day}:`, error);
+        dayCounts[day] = 0;
+      } else {
+        dayCounts[day] = data?.length || 0;
+      }
     }
 
-    // Get total posts today across all days
-    const { count: totalToday } = await supabaseClient
-      .from('day_posts')
-      .select('*', { count: 'exact', head: true })
+    // Get total posts today across all days (only themed day posts, not day summaries)
+    const { data: totalData, error: totalError } = await supabaseClient
+      .from('posts')
+      .select('id', { count: 'exact', head: false })
+      .eq('input_type', 'day')
+      .is('activities', null) // Only themed day posts (exclude day summaries)
+      .eq('moderation_status', 'approved')
       .gte('created_at', today.toISOString())
       .lt('created_at', tomorrow.toISOString());
+    
+    const totalToday = totalError ? 0 : (totalData?.length || 0);
 
     console.log('✅ Day stats fetched successfully');
 

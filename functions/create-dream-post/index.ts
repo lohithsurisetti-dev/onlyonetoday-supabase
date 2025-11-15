@@ -193,16 +193,25 @@ serve(async (req) => {
 
   } catch (error) {
     console.error('❌ Create dream post error:', error);
+    console.error('Error stack:', error.stack);
+    console.error('Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
+    
+    // Provide more detailed error message
+    const errorMessage = error?.message || 'Internal server error';
+    const isValidationError = errorMessage.includes('required') || errorMessage.includes('invalid') || errorMessage.includes('must be');
     
     return new Response(
       JSON.stringify({ 
         success: false, 
-        error: 'Internal server error',
-        details: error.message 
+        error: isValidationError ? errorMessage : 'Failed to create dream. Please try again.',
+        details: process.env.NODE_ENV === 'development' ? errorMessage : undefined
       }),
       { 
-        status: 500,
-        headers: { 'Content-Type': 'application/json' }
+        status: isValidationError ? 400 : 500,
+        headers: { 
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        }
       }
     );
   }
